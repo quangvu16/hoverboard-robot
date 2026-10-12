@@ -1,0 +1,46 @@
+# Hoverboard base: the ONE place for robot geometry and drive limits.
+# Read by hoverboard_base_node/launch/base.launch.py and by
+# robot_bringup/launch/robot_bringup.launch.py (base:=hoverboard).
+#
+# Firmware side: ~/Arduino/ldrobot_ld14p_esp32_ros (HOVERBOARD.md). The ESP32
+# knows only RPM and ticks; everything in metres lives here.
+hoverboard_udp_bridge:
+  ros__parameters:
+    # Measured 2026-09-26: 19.23 cm wheel; odometry read 0.61 m for a real 0.6 m.
+    wheel_radius_m: 0.09615
+    # NOT yet verified. Calibrate with ~/robot_ws/tools/calib_wheel_separation.py
+    # once the LiDAR turns with the chassis, then also update the wheel joint
+    # y offsets in hoverboard_description/urdf/hoverboard.urdf.
+    wheel_separation_m: 0.18
+    # 15 pole pairs x 6 hall states; must equal HB_TICKS_PER_REV in hoverboard.h.
+    encoder_tpr: 90.0
+    # Per-wheel cap before RPM conversion; both wheels scale together.
+    max_wheel_speed_mps: 0.5
+    # Non-zero commands are lifted to at least this; 0 = off. The ESP32 speed
+    # loop (HB_SPEED_LOOP) holds low speeds itself, so this stays 0.
+    min_wheel_rpm: 0.0
+    # true = the chassis' physical rear is the robot's front (rotated 180 deg
+    # about z): forward /cmd_vel drives that way, /odom, wheel joints, side
+    # sonars and turn lights follow. Must match the sensor poses in
+    # hoverboard_description/urdf/hoverboard.urdf (tried and reverted 2026-10-11).
+    reverse_direction: false
+    # Stop if /cmd_vel goes quiet this long.
+    cmd_timeout_s: 0.5
+    odom_frame: odom
+    base_frame: base_footprint
+    publish_tf: true          # false if an EKF (robot_localization) owns odom->base
+                              # (robot_bringup's ekf:=true overrides it)
+    # MPU9250 on the ESP32 (~/Arduino/ldrobot_ld14p_esp32_mpu9250_ros, HBT1
+    # bytes 52-73) -> imu/data. Pose in the URDF's imu_joint. Diagonal
+    # covariances; raise imu_angular_velocity_cov if the EKF trusts the gyro
+    # too much over the wheels, lower it for the reverse. Sized for the
+    # MPU9250 with the spinning LiDAR shaking the chassis (the BNO055 values
+    # were 0.0025 / 0.0004 / 0.04). Orientation is gyro+accel fusion on the
+    # ESP32: yaw relative to power-on and drifting (the EKF does not use it).
+    imu_frame: imu_link
+    imu_orientation_cov: 0.01           # rad^2
+    imu_angular_velocity_cov: 0.0025    # (rad/s)^2, ~2.9 deg/s
+    imu_linear_acceleration_cov: 0.1    # (m/s^2)^2
+    # Hold imu/data until the firmware has learned the gyro bias (robot still
+    # ~2 s after power-on; /imu/calib_status "gyro 3").
+    imu_wait_gyro_cal: true

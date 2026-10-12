@@ -1,0 +1,11 @@
+<!-- Same as map_gmapping_launch.py plus what the Yahboom phone/web app needs:
+     rosbridge (websocket, port 9090), robot pose publishing, map saving
+     (hoverboard_app_save_map), and goal relaying (app_send_goal).
+     Needs: sudo apt install ros-humble-rosbridge-server -->
+<launch>
+  <include file="$(find-pkg-share rosbridge_server)/launch/rosbridge_websocket_launch.xml"/>
+  <include file="$(find-pkg-share hoverboard_nav)/launch/map_gmapping_launch.py"/>
+  <include file="$(find-pkg-share robot_pose_publisher_ros2)/launch/robot_pose_publisher_launch.py"/>
+  <include file="$(find-pkg-share hoverboard_app_save_map)/hoverboard_app_save_map.launch.py"/>
+  <node pkg="hoverboard_nav" exec="app_send_goal" output="screen"/>
+</launch>

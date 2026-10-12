@@ -1,0 +1,183 @@
+<?xml version="1.0"?>
+<!--
+  Hoverboard robot: 0.33 x 0.33 m square chassis on two 6.5" hoverboard hub
+  motors, LD14 LiDAR on top, HC-SR04 sonars at the front, left and right. Replaces Yahboom's
+  MicroROS car model.
+
+  Frames the rest of the stack relies on:
+    base_footprint  odom -> base_footprint comes from hoverboard_udp_bridge_node
+    base_link       Nav2 / Cartographer robot frame
+    base_scan       /scan frame_id (udp_lidar_receiver_node)
+    wheel_left_joint / wheel_right_joint   names the bridge publishes on
+                    /wheel_joint_states
+  Multi-robot: do not copy this file; the launch files add a frame_prefix
+  (robot1/base_link, ...).
+
+  Numbers to keep in step with hoverboard_base_node/config/hoverboard_base.yaml:
+    wheel radius 0.09615 m (verified), wheel separation 0.18 m (NOT yet
+    verified - wheel joints sit at y = +-separation/2).
+  base_scan: 0.15 m above base_link, centred - set it to where the LiDAR is
+  really mounted (x forward, y left, yaw of its zero mark), then run
+  ~/robot_ws/tools/lidar_mirror_test.py.
+-->
+<robot name="hoverboard">
+
+  <material name="dark"><color rgba="0.2 0.2 0.2 1.0"/></material>
+  <material name="black"><color rgba="0.05 0.05 0.05 1.0"/></material>
+  <material name="blue"><color rgba="0.1 0.3 0.8 1.0"/></material>
+  <material name="grey"><color rgba="0.6 0.6 0.6 1.0"/></material>
+
+  <link name="base_footprint"/>
+
+  <!-- base_link at axle height: the wheel centre is one wheel radius up. -->
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0.09615" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry><box size="0.33 0.33 0.10"/></geometry>
+      <material name="dark"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.02" rpy="0 0 0"/>
+      <geometry><box size="0.33 0.33 0.10"/></geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="8.0"/>
+      <inertia ixx="0.08" ixy="0" ixz="0" iyy="0.08" iyz="0" izz="0.15"/>
+    </inertial>
+  </link>
+
+  <joint name="wheel_left_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_left_link"/>
+    <origin xyz="0 0.09 0" rpy="-1.5708 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="wheel_left_link">
+    <visual>
+      <geometry><cylinder length="0.05" radius="0.09615"/></geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry><cylinder length="0.05" radius="0.09615"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="2.5"/>
+      <inertia ixx="0.006" ixy="0" ixz="0" iyy="0.006" iyz="0" izz="0.0115"/>
+    </inertial>
+  </link>
+
+  <joint name="wheel_right_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_right_link"/>
+    <origin xyz="0 -0.09 0" rpy="-1.5708 0 0"/>
+    <axis xyz="0 0 1"/>
+  </joint>
+  <link name="wheel_right_link">
+    <visual>
+      <geometry><cylinder length="0.05" radius="0.09615"/></geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <geometry><cylinder length="0.05" radius="0.09615"/></geometry>
+    </collision>
+    <inertial>
+      <mass value="2.5"/>
+      <inertia ixx="0.006" ixy="0" ixz="0" iyy="0.006" iyz="0" izz="0.0115"/>
+    </inertial>
+  </link>
+
+  <!-- Rear caster keeping the chassis level. -->
+  <joint name="caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="caster_link"/>
+    <origin xyz="-0.13 0 -0.07" rpy="0 0 0"/>
+  </joint>
+  <link name="caster_link">
+    <visual>
+      <geometry><sphere radius="0.025"/></geometry>
+      <material name="grey"/>
+    </visual>
+    <collision>
+      <geometry><sphere radius="0.025"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="scan_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="base_scan"/>
+    <origin xyz="0 0 0.15" rpy="0 0 0"/>  <!-- LiDAR 0 deg faces forward -->
+  </joint>
+  <link name="base_scan">
+    <visual>
+      <origin xyz="0 0 -0.02" rpy="0 0 0"/>
+      <geometry><cylinder length="0.04" radius="0.04"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- HC-SR04 at the front edge, facing forward (sonar.h, SONAR_TRIG/ECHO_PIN). -->
+  <joint name="sonar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="sonar_link"/>
+    <origin xyz="0.165 0 0.05" rpy="0 0 0"/>
+  </joint>
+  <link name="sonar_link">
+    <visual>
+      <geometry><box size="0.02 0.045 0.02"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- Side HC-SR04s at the middle of the left and right edges, facing
+       outwards (x along the beam, as for sonar_link). The firmware turns the
+       robot away below 50 mm. Placeholder x - set it to where they are really
+       mounted. Topics: /ultrasonic/left/*, /ultrasonic/right/*. -->
+  <joint name="sonar_left_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="sonar_left_link"/>
+    <origin xyz="0 0.165 0.05" rpy="0 0 1.5708"/>
+  </joint>
+  <link name="sonar_left_link">
+    <visual>
+      <geometry><box size="0.02 0.045 0.02"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <joint name="sonar_right_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="sonar_right_link"/>
+    <origin xyz="0 -0.165 0.05" rpy="0 0 -1.5708"/>
+  </joint>
+  <link name="sonar_right_link">
+    <visual>
+      <geometry><box size="0.02 0.045 0.02"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+  <!-- MPU9250 IMU (/imu/data, frame imu_link), on I2C to the ESP32. Placeholder
+       pose: set xyz to where the board is really mounted, and rpy so that the
+       chip's X/Y/Z (printed on the breakout) map onto base_link's
+       forward/left/up. Check: robot still, linear_acceleration.z ~ +9.8;
+       turning left (counter-clockwise), angular_velocity.z > 0. -->
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="imu_link"/>
+    <origin xyz="0 0 0.05" rpy="0 0 0"/>
+  </joint>
+  <link name="imu_link">
+    <visual>
+      <geometry><box size="0.027 0.02 0.004"/></geometry>
+      <material name="blue"/>
+    </visual>
+  </link>
+
+</robot>

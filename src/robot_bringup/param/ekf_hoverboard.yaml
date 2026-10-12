@@ -1,0 +1,49 @@
+# robot_localization EKF for the hoverboard base: wheel odometry + MPU9250.
+# Started by robot_bringup.launch.py with ekf:=true, which also turns the
+# bridge's own odom->base_footprint TF off - exactly one node may publish it.
+#
+# What is fused, and why:
+#   odom0 (/odom, hoverboard_udp_bridge)  vx and vyaw. Wheel speed is good;
+#       its yaw rate is not (wheel_separation_m unverified, hub wheels slip
+#       when turning on the spot).
+#   imu0 (/imu/data, MPU9250, gyro+accel)  vyaw only. The gyro is what fixes
+#       turning. Its yaw *orientation* is left out: without the compass it is
+#       relative to power-on and drifts slowly, and the EKF integrates the
+#       rate anyway. Revisit if the chip ever runs NDOF away from the motors.
+#
+# Output: /odom/filtered (remapped in the launch file) and the
+# odom->base_footprint TF. slam_toolbox, Cartographer and nav2 only use the TF,
+# so they pick it up unchanged.
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0
+    sensor_timeout: 0.2
+    two_d_mode: true
+    publish_tf: true
+
+    map_frame: map
+    odom_frame: odom
+    base_link_frame: base_footprint
+    world_frame: odom
+
+    # Order: x y z, roll pitch yaw, vx vy vz, vroll vpitch vyaw, ax ay az
+    odom0: odom
+    odom0_config: [false, false, false,
+                   false, false, false,
+                   true,  false, false,
+                   false, false, true,
+                   false, false, false]
+    odom0_differential: false
+    odom0_relative: false
+    odom0_queue_size: 5
+
+    imu0: imu/data
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]
+    imu0_differential: false
+    imu0_relative: true
+    imu0_remove_gravitational_acceleration: true
+    imu0_queue_size: 10

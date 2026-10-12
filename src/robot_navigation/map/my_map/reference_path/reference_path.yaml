@@ -1,0 +1,8 @@
+image: ./reference_path.pgm
+resolution: 0.050000
+origin: [-1.720000, -0.060000, 0.000000]
+negate: 1
+occupied_thresh: 0.5
+free_thresh: 0.196
+width: 40
+height: 50

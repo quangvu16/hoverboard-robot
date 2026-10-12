@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Save the map Cartographer is building, for navigation later:
+#
+#   ros2 run robot_cartographer save_map ~/m_map
+#
+# writes ~/m_map.pbstream (Cartographer's own state: what
+# cartographer_nav.launch.py map:=~/m_map.pbstream localizes against) and
+# ~/m_map.yaml + .pgm (occupancy grid, for viewing or AMCL's navigation2.launch.py).
+#
+# Finishes the trajectory first, so the last submaps are optimized into the
+# map; Cartographer stops mapping after that - restart it to map again.
+set -euo pipefail
+
+base="${1:-$HOME/m_map}"
+base="$(realpath -m "${base%.pbstream}")"
+
+echo "Finishing trajectory 0 (final optimization, can take a few seconds)..."
+ros2 service call /finish_trajectory cartographer_ros_msgs/srv/FinishTrajectory \
+  "{trajectory_id: 0}"
+
+echo "Writing ${base}.pbstream ..."
+ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
+  "{filename: '${base}.pbstream', include_unfinished_submaps: true}"
+
+echo "Writing ${base}.yaml / .pgm ..."
+ros2 run nav2_map_server map_saver_cli -f "${base}"
+
+ls -l "${base}.pbstream" "${base}.yaml" "${base}.pgm"

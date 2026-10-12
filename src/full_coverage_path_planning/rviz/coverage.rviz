@@ -1,0 +1,46 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Map
+      Name: Map
+      Enabled: true
+      Topic: {Value: /map, Durability Policy: Transient Local}
+    - Class: rviz_default_plugins/Map
+      Name: Coverage
+      Enabled: true
+      Alpha: 0.5
+      Color Scheme: costmap
+      Topic: {Value: /coverage_grid}
+    - Class: rviz_default_plugins/Path
+      Name: CoveragePlan
+      Enabled: true
+      Color: 0; 170; 255
+      Topic: {Value: /coverage_plan, Durability Policy: Transient Local}
+    - Class: rviz_default_plugins/LaserScan
+      Name: Scan
+      Enabled: true
+      Size (m): 0.04
+      Topic: {Value: /scan, Reliability Policy: Best Effort}
+    - Class: rviz_default_plugins/RobotModel
+      Name: Robot
+      Enabled: true
+      Description Topic: {Value: /robot_description}
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Global Options:
+    Fixed Frame: map
+  Tools:
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic: {Value: /initialpose}
+    - Class: rviz_default_plugins/SetGoal
+      Topic: {Value: /goal_pose}
+    - Class: rviz_default_plugins/Interact
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Scale: 60

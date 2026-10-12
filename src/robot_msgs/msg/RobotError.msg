@@ -1,0 +1,9 @@
+int32 motors
+bool bumper
+bool emergency_button
+bool manual_button
+bool battery
+bool xi_lanh
+bool lidar
+bool camera
+bool warning

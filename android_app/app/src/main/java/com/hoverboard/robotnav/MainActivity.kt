@@ -1,0 +1,398 @@
+package com.hoverboard.robotnav
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.Context
+import android.content.res.ColorStateList
+import android.graphics.Bitmap
+import android.graphics.Typeface
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
+import android.text.InputType
+import android.view.Gravity
+import android.view.View
+import android.view.WindowManager
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.TableLayout
+import android.widget.TableRow
+import android.widget.TextView
+import org.json.JSONArray
+import org.json.JSONObject
+import java.util.Locale
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+
+/**
+ * Navigate the hoverboard robot through rosbridge (robot_web_nav on the PC):
+ * same topics as the web page - /map, /plan, /web/robot_pose, /web/nav_status in;
+ * /web/goal, /web/cancel, /initialpose out.
+ */
+class MainActivity : Activity(), RosBridge.Listener {
+
+    private lateinit var ros: RosBridge
+    private lateinit var mapView: MapView
+    private val ui = Handler(Looper.getMainLooper())
+    private val prefs by lazy { getSharedPreferences("robot_nav", Context.MODE_PRIVATE) }
+
+    private var robot: MapView.Pose2D? = null
+    private var robotT = 0L
+    private var statusT = 0L
+    private var navState = "idle"
+
+    private lateinit var pConn: TextView
+    private lateinit var pStack: TextView
+    private lateinit var pNav: TextView
+    private lateinit var pMap: TextView
+    private lateinit var sState: TextView
+    private lateinit var sMsg: TextView
+    private lateinit var sDot: View
+    private lateinit var btnCancel: Button
+    private val detail = HashMap<String, TextView>()
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        mapView = findViewById(R.id.map)
+        pConn = findViewById(R.id.pConn); pStack = findViewById(R.id.pStack)
+        pNav = findViewById(R.id.pNav); pMap = findViewById(R.id.pMap)
+        sState = findViewById(R.id.sState); sMsg = findViewById(R.id.sMsg); sDot = findViewById(R.id.sDot)
+        btnCancel = findViewById(R.id.btnCancel)
+        buildDetails()
+
+        ros = RosBridge(this)
+        ros.subscribe("/map", "nav_msgs/msg/OccupancyGrid", throttleMs = 2000)
+        ros.subscribe("/web/robot_pose", "geometry_msgs/msg/PoseStamped", throttleMs = 100)
+        ros.subscribe("/web/nav_status", "std_msgs/msg/String")
+        ros.subscribe("/plan", "nav_msgs/msg/Path", throttleMs = 500)
+
+        mapView.onPick = { mode, x, y, yaw -> onPick(mode, x, y, yaw) }
+        findViewById<Button>(R.id.mGoal).setOnClickListener { setMode(MapView.Mode.GOAL) }
+        findViewById<Button>(R.id.mPose).setOnClickListener { setMode(MapView.Mode.POSE) }
+        findViewById<Button>(R.id.mPan).setOnClickListener { setMode(MapView.Mode.PAN) }
+        findViewById<Button>(R.id.zFit).setOnClickListener { mapView.fit() }
+        findViewById<Button>(R.id.zRobot).setOnClickListener { mapView.centreOnRobot() }
+        findViewById<Button>(R.id.btnRobot).setOnClickListener { askAddress() }
+        findViewById<Button>(R.id.spotSave).setOnClickListener { saveSpot() }
+        btnCancel.setOnClickListener {
+            if (!ros.publish("/web/cancel", "std_msgs/msg/Empty", JSONObject())) toast("Not connected")
+        }
+        setMode(MapView.Mode.GOAL)
+        showState("idle", "")
+        renderSpots()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val url = prefs.getString("url", null)
+        if (url == null) askAddress() else ros.connect(url)
+        ui.post(ticker)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        ui.removeCallbacks(ticker)
+        ros.disconnect()
+    }
+
+    // ---------------------------------------------------------------- address
+    private fun askAddress() {
+        val input = EditText(this).apply {
+            setText(prefs.getString("url", "ws://192.168.1.12:9090"))
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            setSingleLine()
+            setSelection(text.length)
+        }
+        val box = LinearLayout(this).apply {
+            setPadding(dp(20), dp(8), dp(20), 0)
+            addView(input, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Robot PC address")
+            .setMessage("rosbridge websocket of the PC running robot_web_nav, e.g. ws://192.168.1.12:9090")
+            .setView(box)
+            .setPositiveButton("Connect") { _, _ ->
+                var url = input.text.toString().trim()
+                if (!url.startsWith("ws://") && !url.startsWith("wss://")) url = "ws://$url"
+                if (!url.substringAfter("://").contains(":")) url += ":9090"
+                prefs.edit().putString("url", url).apply()
+                ros.connect(url)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    // ---------------------------------------------------------------- rosbridge
+    override fun onState(state: RosBridge.State, detail: String) {
+        when (state) {
+            RosBridge.State.CONNECTED -> pill(pConn, "connected", R.color.ok, R.color.ok_soft)
+            RosBridge.State.CONNECTING -> pill(pConn, "connecting…", R.color.muted, R.color.sunk)
+            RosBridge.State.DISCONNECTED -> {
+                pill(pConn, "no rosbridge", R.color.bad, R.color.bad_soft)
+                if (detail.isNotEmpty() && detail != "stopped") sMsg.text = "Connection: $detail"
+            }
+        }
+    }
+
+    override fun onMessage(topic: String, msg: JSONObject) {
+        when (topic) {
+            "/map" -> {                       // decode here, off the UI thread
+                val grid = decodeMap(msg) ?: return
+                ui.post {
+                    mapView.setMap(grid)
+                    findViewById<View>(R.id.overlay).visibility = View.GONE
+                    pill(pMap, "map ${grid.w}×${grid.h} @ ${(grid.res * 100).roundToInt()} cm", R.color.ok, R.color.ok_soft)
+                }
+            }
+            "/web/robot_pose" -> {
+                val p = msg.getJSONObject("pose")
+                val pos = p.getJSONObject("position")
+                val pose = MapView.Pose2D(pos.getDouble("x"), pos.getDouble("y"), yawOf(p.getJSONObject("orientation")))
+                ui.post {
+                    robot = pose; robotT = SystemClock.elapsedRealtime()
+                    mapView.robotStale = false
+                    mapView.setRobot(pose)
+                    detail["xy"]?.text = String.format(Locale.US, "%.2f, %.2f m", pose.x, pose.y)
+                    detail["heading"]?.text = deg(pose.yaw)
+                }
+            }
+            "/plan" -> {
+                val poses = msg.getJSONArray("poses")
+                val xy = DoubleArray(poses.length() * 2)
+                for (i in 0 until poses.length()) {
+                    val pos = poses.getJSONObject(i).getJSONObject("pose").getJSONObject("position")
+                    xy[2 * i] = pos.getDouble("x"); xy[2 * i + 1] = pos.getDouble("y")
+                }
+                ui.post { if (navState == "active" || navState == "sending") mapView.setPlan(xy) }
+            }
+            "/web/nav_status" -> {
+                val st = try { JSONObject(msg.getString("data")) } catch (e: Exception) { return }
+                ui.post { onStatus(st) }
+            }
+        }
+    }
+
+    private fun decodeMap(msg: JSONObject): MapView.GridMap? {
+        val info = msg.getJSONObject("info")
+        val w = info.getInt("width"); val h = info.getInt("height")
+        if (w <= 0 || h <= 0) return null
+        val origin = info.getJSONObject("origin").getJSONObject("position")
+        val data: JSONArray = msg.getJSONArray("data")
+        val px = IntArray(w * h)
+        for (y in 0 until h) {
+            val row = (h - 1 - y) * w            // grid row 0 is the bottom of the map
+            for (x in 0 until w) {
+                val v = data.getInt(y * w + x)
+                px[row + x] = if (v < 0) 0xFFC8CCD2.toInt() else {
+                    val g = 250 - v * 222 / 100   // free 250 .. occupied 28
+                    (0xFF shl 24) or (g shl 16) or (g shl 8) or g
+                }
+            }
+        }
+        val bmp = Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+        return MapView.GridMap(bmp, w, h, info.getDouble("resolution"), origin.getDouble("x"), origin.getDouble("y"))
+    }
+
+    private fun onStatus(st: JSONObject) {
+        statusT = SystemClock.elapsedRealtime()
+        navState = st.optString("state", "idle")
+        showState(navState, st.optString("message"))
+        val g = st.optJSONObject("goal")
+        if (g != null) {
+            val goal = MapView.Pose2D(g.getDouble("x"), g.getDouble("y"), g.getDouble("yaw"))
+            mapView.setGoal(goal)
+            detail["goal"]?.text = String.format(Locale.US, "%.2f, %.2f · %s", goal.x, goal.y, deg(goal.yaw))
+        } else {
+            mapView.setGoal(null); detail["goal"]?.text = "—"
+        }
+        val live = navState == "active"
+        detail["dist"]?.text = if (live && st.has("distance_remaining")) String.format(Locale.US, "%.2f m", st.getDouble("distance_remaining")) else "—"
+        detail["eta"]?.text = if (live && st.optDouble("eta_s", 0.0) > 0) "${st.getDouble("eta_s").roundToInt()} s" else "—"
+        detail["time"]?.text = if (live && st.has("nav_time_s")) "${st.getDouble("nav_time_s").roundToInt()} s" else "—"
+        detail["rec"]?.text = if (live && st.has("recoveries")) st.getInt("recoveries").toString() else "—"
+        pill(pStack, "stack " + st.optString("stack", "?"), R.color.accent, R.color.accent_soft)
+        if (st.optBoolean("server_ready")) pill(pNav, "Nav2 ready", R.color.ok, R.color.ok_soft)
+        else pill(pNav, "Nav2 not running", R.color.bad, R.color.bad_soft)
+        if (!live && navState != "sending") mapView.setPlan(DoubleArray(0))
+    }
+
+    private val ticker = object : Runnable {
+        override fun run() {
+            val now = SystemClock.elapsedRealtime()
+            if (ros.state == RosBridge.State.CONNECTED && now - statusT > 3000) {
+                pill(pNav, "web_nav_bridge silent", R.color.bad, R.color.bad_soft)
+            }
+            if (robot != null) {
+                val age = (now - robotT) / 1000.0
+                detail["age"]?.text = String.format(Locale.US, "%.1f s", age)
+                mapView.robotStale = age > 2.0
+            }
+            ui.postDelayed(this, 1000)
+        }
+    }
+
+    // ---------------------------------------------------------------- commands
+    private fun onPick(mode: MapView.Mode, x: Double, y: Double, yaw: Double?) {
+        val r = robot
+        if (mode == MapView.Mode.GOAL) {
+            // a plain tap: face the way it drove there
+            val heading = yaw ?: if (r != null) atan2(y - r.y, x - r.x) else 0.0
+            sendGoal(x, y, heading)
+        } else {
+            sendInitialPose(x, y, yaw ?: r?.yaw ?: 0.0)
+        }
+    }
+
+    private fun header(): JSONObject {
+        val ms = System.currentTimeMillis()
+        return JSONObject().put("frame_id", "map")
+            .put("stamp", JSONObject().put("sec", ms / 1000).put("nanosec", (ms % 1000) * 1_000_000))
+    }
+
+    private fun pose(x: Double, y: Double, yaw: Double) = JSONObject()
+        .put("position", JSONObject().put("x", x).put("y", y).put("z", 0.0))
+        .put("orientation", JSONObject().put("x", 0.0).put("y", 0.0).put("z", sin(yaw / 2)).put("w", cos(yaw / 2)))
+
+    private fun sendGoal(x: Double, y: Double, yaw: Double) {
+        val ok = ros.publish("/web/goal", "geometry_msgs/msg/PoseStamped",
+            JSONObject().put("header", header()).put("pose", pose(x, y, yaw)))
+        if (ok) mapView.setGoal(MapView.Pose2D(x, y, yaw)) else toast("Not connected: goal not sent")
+    }
+
+    private fun sendInitialPose(x: Double, y: Double, yaw: Double) {
+        val cov = JSONArray()
+        for (i in 0 until 36) cov.put(when (i) { 0, 7 -> 0.25; 35 -> 0.0685; else -> 0.0 })
+        val ok = ros.publish("/initialpose", "geometry_msgs/msg/PoseWithCovarianceStamped",
+            JSONObject().put("header", header()).put("pose", JSONObject().put("pose", pose(x, y, yaw)).put("covariance", cov)))
+        sMsg.text = if (ok) String.format(Locale.US, "Initial pose sent: %.2f, %.2f · %s", x, y, deg(yaw))
+                    else "Not connected: pose not sent"
+    }
+
+    // ---------------------------------------------------------------- UI helpers
+    private fun setMode(m: MapView.Mode) {
+        mapView.mode = m
+        mapOf(R.id.mGoal to MapView.Mode.GOAL, R.id.mPose to MapView.Mode.POSE, R.id.mPan to MapView.Mode.PAN)
+            .forEach { (id, mode) ->
+                val b = findViewById<Button>(id)
+                val on = mode == m
+                b.backgroundTintList = ColorStateList.valueOf(getColor(if (on) R.color.accent else R.color.surface))
+                b.setTextColor(getColor(if (on) R.color.on_accent else R.color.fg))
+            }
+        findViewById<TextView>(R.id.hint).text = when (m) {
+            MapView.Mode.GOAL -> "Tap where to go · drag to set heading · two fingers to zoom"
+            MapView.Mode.POSE -> "Tap where the robot really is · drag the way it faces"
+            MapView.Mode.PAN -> "Drag to move · pinch to zoom"
+        }
+    }
+
+    private val looks = mapOf(
+        "idle" to Triple("Idle", R.color.muted, false), "sending" to Triple("Sending…", R.color.accent, true),
+        "active" to Triple("Driving", R.color.accent, true), "succeeded" to Triple("Arrived", R.color.ok, false),
+        "aborted" to Triple("Failed", R.color.bad, false), "canceled" to Triple("Cancelled", R.color.warn, false),
+        "rejected" to Triple("Rejected", R.color.bad, false), "unavailable" to Triple("Nav2 not running", R.color.bad, false),
+    )
+
+    private fun showState(state: String, message: String) {
+        val (label, color, cancellable) = looks[state] ?: Triple(state, R.color.muted, false)
+        sState.text = label
+        sDot.backgroundTintList = ColorStateList.valueOf(getColor(color))
+        if (message.isNotEmpty() || state != "idle") sMsg.text = message
+        btnCancel.isEnabled = cancellable
+        btnCancel.alpha = if (cancellable) 1f else 0.35f
+    }
+
+    private fun pill(v: TextView, text: String, fg: Int, bg: Int) {
+        v.text = text
+        v.setTextColor(getColor(fg))
+        v.backgroundTintList = ColorStateList.valueOf(getColor(bg))
+    }
+
+    private fun buildDetails() {
+        val table = findViewById<TableLayout>(R.id.details)
+        listOf("goal" to "Goal", "dist" to "Distance left", "eta" to "ETA", "time" to "Driving for",
+            "rec" to "Recoveries", "xy" to "Robot x, y", "heading" to "Robot heading", "age" to "Pose age")
+            .forEach { (key, label) ->
+                val row = TableRow(this).apply { setPadding(0, dp(3), 0, dp(3)) }
+                row.addView(TextView(this).apply { text = label; setTextColor(getColor(R.color.muted)); textSize = 14f })
+                val value = TextView(this).apply {
+                    text = "—"; gravity = Gravity.END; typeface = Typeface.MONOSPACE
+                    setTextColor(getColor(R.color.fg)); textSize = 14f
+                }
+                row.addView(value)
+                detail[key] = value
+                table.addView(row)
+            }
+    }
+
+    // ---------------------------------------------------------------- saved spots
+    private fun loadSpots(): JSONArray = try { JSONArray(prefs.getString("spots", "[]")) } catch (e: Exception) { JSONArray() }
+
+    private fun saveSpot() {
+        val r = robot ?: return toast("No robot pose yet, so nothing to save")
+        val field = findViewById<EditText>(R.id.spotName)
+        val spots = loadSpots()
+        val name = field.text.toString().trim().ifEmpty { "Spot ${spots.length() + 1}" }
+        spots.put(JSONObject().put("name", name).put("x", r.x).put("y", r.y).put("yaw", r.yaw))
+        prefs.edit().putString("spots", spots.toString()).apply()
+        field.setText("")
+        renderSpots()
+    }
+
+    private fun renderSpots() {
+        val list = findViewById<LinearLayout>(R.id.spots)
+        list.removeAllViews()
+        val spots = loadSpots()
+        if (spots.length() == 0) {
+            list.addView(TextView(this).apply {
+                text = "None yet. Drive the robot somewhere, name it, and tap “Save here”."
+                setTextColor(getColor(R.color.muted)); textSize = 14f
+            })
+            return
+        }
+        for (i in 0 until spots.length()) {
+            val s = spots.getJSONObject(i)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(4), 0, dp(4))
+            }
+            val label = TextView(this).apply {
+                text = String.format(Locale.US, "%s\n%.2f, %.2f · %s", s.getString("name"),
+                    s.getDouble("x"), s.getDouble("y"), deg(s.getDouble("yaw")))
+                setTextColor(getColor(R.color.fg)); textSize = 14f
+            }
+            row.addView(label, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(smallButton("Go", true) { sendGoal(s.getDouble("x"), s.getDouble("y"), s.getDouble("yaw")) })
+            row.addView(smallButton("✕", false) {
+                val a = loadSpots(); a.remove(i)
+                prefs.edit().putString("spots", a.toString()).apply(); renderSpots()
+            })
+            list.addView(row)
+        }
+    }
+
+    private fun smallButton(label: String, primary: Boolean, onClick: () -> Unit) = Button(this).apply {
+        text = label; isAllCaps = false; textSize = 14f; minWidth = 0; minimumWidth = 0; minHeight = 0; minimumHeight = 0
+        setPadding(dp(14), 0, dp(14), 0)
+        setBackgroundResource(R.drawable.rounded)
+        backgroundTintList = ColorStateList.valueOf(getColor(if (primary) R.color.accent else R.color.sunk))
+        setTextColor(getColor(if (primary) R.color.on_accent else R.color.fg))
+        stateListAnimator = null
+        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(38)).apply { marginStart = dp(6) }
+        setOnClickListener { onClick() }
+    }
+
+    private fun toast(t: String) { android.widget.Toast.makeText(this, t, android.widget.Toast.LENGTH_SHORT).show() }
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).roundToInt()
+    private fun yawOf(q: JSONObject): Double {
+        val x = q.getDouble("x"); val y = q.getDouble("y"); val z = q.getDouble("z"); val w = q.getDouble("w")
+        return atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
+    }
+    private fun deg(r: Double) = "${Math.toDegrees(r).roundToInt()}°"
+}

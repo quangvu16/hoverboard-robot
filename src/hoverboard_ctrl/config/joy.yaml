@@ -1,0 +1,21 @@
+# Gamepad mapping for hoverboard_joy. Defaults follow Yahboom's gamepad
+# (left stick up/down = axis 1, right stick left/right = axis 2).
+# Check yours with: ros2 topic echo /joy
+joy_ctrl:
+  ros__parameters:
+    xspeed_limit: 0.5          # m/s at full stick, top gear
+    angular_speed_limit: 1.5   # rad/s
+    axis_linear: 1
+    axis_angular: 2            # many Xbox-style pads use 3
+    deadzone: 0.2
+    button_mode: 7             # MANUAL/AUTO toggle (START on Yahboom's pad)
+    button_buzzer: 11
+    button_gear_linear: 9
+    button_gear_angular: 10
+    start_manual: true
+    enable_servos: false       # no camera pan/tilt fitted
+    cmd_vel_topic: cmd_vel
+joy_node:
+  ros__parameters:
+    autorepeat_rate: 20.0      # keep commands flowing while a stick is held
+    deadzone: 0.05

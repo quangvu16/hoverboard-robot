@@ -1,0 +1,133 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.substitutions import LaunchConfiguration, Command, PathJoinSubstitution
+from launch_ros.actions import Node
+from launch_ros.substitutions import FindPackageShare
+from launch.substitutions import FindExecutable
+
+import os
+import yaml
+
+
+def _robot_description_for(name: str):
+    # URDF/Xacro must support: <xacro:arg name="prefix" default=""/>
+    # and every link/joint/parent/child must use $(arg prefix).
+    xacro_file = PathJoinSubstitution([
+        FindPackageShare('robot_description'),
+        'urdf',
+        'robot_esp_prefixed.urdf.xacro',
+    ])
+
+    return Command([
+        FindExecutable(name='xacro'),
+        ' ',
+        xacro_file,
+        ' ',
+        'prefix:=',
+        name,
+        '/',
+    ])
+
+
+def launch_setup(context, *args, **kwargs):
+    robots_file = LaunchConfiguration('robots_file').perform(context)
+
+    with open(robots_file, 'r') as f:
+        cfg = yaml.safe_load(f)
+
+    actions = []
+
+    for robot in cfg.get('robots', []):
+        name = robot['name']
+        robot_description = _robot_description_for(name)
+
+        esp_config = os.path.expanduser(
+            os.path.expandvars(robot['esp_config'])
+        )
+
+        # 1) Publish static/dynamic TF from URDF with prefixed frames:
+        #    robot_1/base_footprint -> robot_1/base_link -> robot_1/base_scan ...
+        actions.append(
+            Node(
+                package='robot_state_publisher',
+                executable='robot_state_publisher',
+                namespace=name,
+                name='robot_state_publisher',
+                output='screen',
+                parameters=[{
+                    'robot_description': robot_description,
+                    'use_sim_time': bool(robot.get('use_sim_time', False)),
+                }],
+            )
+        )
+
+        # 2) Publish wheel joint states per robot.
+        #    Give robot_description directly as parameter to avoid:
+        #    "Waiting for robot_description to be published on the robot_description topic..."
+        actions.append(
+            Node(
+                package='joint_state_publisher',
+                executable='joint_state_publisher',
+                namespace=name,
+                name='joint_state_publisher',
+                output='screen',
+                parameters=[{
+                    'robot_description': robot_description,
+                    'use_sim_time': bool(robot.get('use_sim_time', False)),
+                }],
+            )
+        )
+
+        # 3) ESP TCP bridge per robot.
+        #    Topics are relative inside C++ code:
+        #      /robot_1/odom, /robot_1/cmd_vel, /robot_1/esp/device_state ...
+        #    TF frames are passed as parameters:
+        #      robot_1/odom -> robot_1/base_link
+        actions.append(
+            Node(
+                package='esp_tcp_server_multi',
+                executable='esp_tcp_server_node',
+                namespace=name,
+                name='esp_node',
+                output='screen',
+                parameters=[{
+                    'config_path': esp_config,
+                    'odom_frame': robot.get('odom_frame', f'{name}/odom'),
+                    'base_frame': robot.get('base_frame', f'{name}/base_link'),
+                }],
+            )
+        )
+
+        # 4) UDP LiDAR receiver per robot.
+        #    Topic is relative: /robot_X/scan
+        #    frame_id must match URDF/Xacro: robot_X/base_scan
+        actions.append(
+            Node(
+                package='esp_tcp_server_multi',
+                executable='udp_lidar_receiver_node',
+                namespace=name,
+                name='udp_lidar_receiver',
+                output='screen',
+                parameters=[{
+                    'port': int(robot['lidar_port']),
+                    'frame_id': robot.get('lidar_frame', f'{name}/base_scan'),
+                    'flip_lr': bool(robot.get('flip_lr', True)),
+                    'angle0_deg': float(robot.get('angle0_deg', 180.0)),
+                }],
+            )
+        )
+
+    return actions
+
+
+def generate_launch_description():
+    default_robots_file = '/home/ubuntu/robot_ESP_ws/src/esp_tcp_server_multi/config/esp_tcp_server/robots.yaml'
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'robots_file',
+            default_value=default_robots_file,
+            description='Path to robots.yaml'
+        ),
+        OpaqueFunction(function=launch_setup),
+    ])

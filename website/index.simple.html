@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hoverboard Robot: ROS 2 Humble + ESP32</title>
+<meta name="description" content="A differential-drive robot built on a hoverboard base with an ESP32, LD14 LiDAR, MPU9250 IMU and ROS 2 Humble (Cartographer, Nav2, web and Android control).">
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #ffffff; --text: #1d1f21; --muted: #5d6166;
+    --line: #e2e3e0; --accent: #0b6e4f; --accent-soft: #e3f1ec; --code-bg: #f0f1ee;
+    --warn: #8a5a00; --warn-soft: #fbf1dc;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121416; --surface: #1a1d20; --text: #e6e7e8; --muted: #9ba1a6;
+      --line: #2c3035; --accent: #4cc39a; --accent-soft: #173229; --code-bg: #202428;
+      --warn: #e8b64c; --warn-soft: #2f2715;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  a { color: var(--accent); }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .88em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 4px; }
+  pre { background: var(--code-bg); padding: 1rem 1.1rem; border-radius: 8px; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+
+  nav {
+    position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 1.5rem; height: 56px; }
+  nav .brand { font-weight: 700; color: var(--text); text-decoration: none; margin-right: auto; }
+  nav a.link { color: var(--muted); text-decoration: none; font-size: .93rem; }
+  nav a.link:hover { color: var(--text); }
+  @media (max-width: 640px) { nav a.link { display: none; } }
+
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 1.25rem; }
+  header.hero { padding: 4.5rem 0 3rem; }
+  .hero h1 { font-size: clamp(2rem, 5vw, 3.1rem); line-height: 1.15; margin: 0 0 1rem; letter-spacing: -.02em; }
+  .hero p.lead { font-size: 1.15rem; color: var(--muted); max-width: 680px; margin: 0 0 1.75rem; }
+  .tags { display: flex; flex-wrap: wrap; gap: .5rem; }
+  .tag { background: var(--accent-soft); color: var(--accent); padding: .25rem .7rem; border-radius: 999px; font-size: .85rem; font-weight: 600; }
+
+  section { padding: 3rem 0; border-top: 1px solid var(--line); }
+  section h2 { font-size: 1.6rem; margin: 0 0 .4rem; letter-spacing: -.01em; }
+  section p.sub { color: var(--muted); margin: 0 0 2rem; max-width: 700px; }
+
+  .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1.15rem 1.2rem; }
+  .card h3 { margin: 0 0 .35rem; font-size: 1.02rem; }
+  .card p { margin: 0; color: var(--muted); font-size: .94rem; }
+
+  .diagram { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 1rem; overflow-x: auto; }
+  .diagram svg { display: block; width: 100%; min-width: 720px; height: auto; }
+  .diagram .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.5; }
+  .diagram .box.hw { fill: var(--accent-soft); stroke: var(--accent); }
+  .diagram text { fill: var(--text); font: 13px system-ui, sans-serif; }
+  .diagram text.t { font-weight: 700; font-size: 14px; }
+  .diagram text.s { fill: var(--muted); font-size: 12px; }
+  .diagram line, .diagram path { stroke: var(--muted); stroke-width: 1.5; fill: none; }
+  .diagram .lbl { fill: var(--muted); font-size: 11.5px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .94rem; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .6rem .9rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); background: var(--code-bg); }
+  tr:last-child td { border-bottom: none; }
+  .tbl { overflow-x: auto; }
+
+  .steps { counter-reset: s; display: grid; gap: 1.25rem; }
+  .step { counter-increment: s; display: grid; grid-template-columns: 2.2rem 1fr; gap: .9rem; }
+  .step::before {
+    content: counter(s); width: 2.2rem; height: 2.2rem; border-radius: 50%; display: grid; place-items: center;
+    background: var(--accent); color: var(--bg); font-weight: 700;
+  }
+  .step h3 { margin: .2rem 0 .5rem; font-size: 1.05rem; }
+  .step pre { margin: 0; }
+
+  .note { background: var(--warn-soft); border-left: 4px solid var(--warn); padding: .9rem 1.1rem; border-radius: 6px; }
+  .note strong { color: var(--warn); }
+  ul.status { margin: .6rem 0 0; padding-left: 1.2rem; }
+  ul.status li { margin: .25rem 0; }
+
+  footer { border-top: 1px solid var(--line); padding: 2rem 0 3rem; color: var(--muted); font-size: .9rem; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#">Hoverboard Robot</a>
+    <a class="link" href="#features">Features</a>
+    <a class="link" href="#architecture">Architecture</a>
+    <a class="link" href="#hardware">Hardware</a>
+    <a class="link" href="#run">Get started</a>
+    <a class="link" href="#status">Status</a>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="wrap">
+    <h1>A hoverboard turned into an<br>autonomous ROS 2 robot</h1>
+    <p class="lead">
+      The robot uses a hoverboard's hub motors and FOC mainboard as its drive base. An ESP32 links it
+      to a ROS 2 Humble PC over Wi-Fi. A 360° LiDAR, an IMU and three ultrasonic sensors
+      feed Cartographer mapping and Nav2 navigation. You can drive it from a browser or an Android app.
+    </p>
+    <div class="tags">
+      <span class="tag">ROS 2 Humble</span>
+      <span class="tag">ESP32</span>
+      <span class="tag">LDROBOT LD14 LiDAR</span>
+      <span class="tag">MPU9250 IMU</span>
+      <span class="tag">Cartographer</span>
+      <span class="tag">Nav2</span>
+      <span class="tag">robot_localization EKF</span>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="sub">One bringup launch starts the base, the LiDAR and the robot model. Everything else layers on top of it.</p>
+    <div class="grid">
+      <div class="card"><h3>Mapping</h3><p>Cartographer (or slam_toolbox) builds a 2D map from the LiDAR. Save it as <code>.pbstream</code> plus <code>.yaml/.pgm</code>.</p></div>
+      <div class="card"><h3>Navigation</h3><p>Nav2 plans and follows paths on a saved map. It can localize with Cartographer or AMCL, or navigate while it maps.</p></div>
+      <div class="card"><h3>Sensor fusion</h3><p>An EKF fuses wheel odometry with the MPU9250 gyro and publishes <code>/odom/filtered</code> for Nav2 and Cartographer.</p></div>
+      <div class="card"><h3>Web control</h3><p>A page served over rosbridge shows the map and the robot. Click to set a goal, cancel it, set the pose, or save spots.</p></div>
+      <div class="card"><h3>Android app</h3><p>A Kotlin app uses the same topics as the web page, so you can navigate from a phone.</p></div>
+      <div class="card"><h3>Safety reflexes</h3><p>Firmware on the ESP32 reverses at 350 mm (front sonar) and turns away at 50 mm (side sonars). Turn and stop LEDs follow the motion.</p></div>
+      <div class="card"><h3>Exploration &amp; coverage</h3><p>Two frontier explorers (<code>explore_lite</code>, <code>auto_mapper</code>) and a Spiral-STC full-coverage planner.</p></div>
+      <div class="card"><h3>Manual driving</h3><p>Drive by gamepad, keyboard teleop or rqt_robot_steering. Laser follow, avoid and warning behaviours are also included.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="architecture">
+  <div class="wrap">
+    <h2>Architecture</h2>
+    <p class="sub">The base controller is not a ROS node. The ESP32 speaks small binary UDP protocols, and one bridge node translates them into standard ROS topics and TF.</p>
+
+    <div class="diagram" role="img" aria-label="Data flow: hoverboard mainboard and sensors connect to the ESP32, which talks UDP over Wi-Fi to the ROS 2 PC bridge nodes, which feed the EKF, Cartographer and Nav2, controlled from the web page and Android app.">
+      <svg viewBox="0 0 960 330" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--muted); stroke: none"/>
+          </marker>
+        </defs>
+
+        <!-- hardware column -->
+        <rect class="box hw" x="10" y="20" width="190" height="62" rx="8"/>
+        <text class="t" x="24" y="46">Hoverboard mainboard</text>
+        <text class="s" x="24" y="66">FOC firmware, 2 hub motors</text>
+
+        <rect class="box hw" x="10" y="100" width="190" height="62" rx="8"/>
+        <text class="t" x="24" y="126">LD14 LiDAR</text>
+        <text class="s" x="24" y="146">360° scan</text>
+
+        <rect class="box hw" x="10" y="180" width="190" height="62" rx="8"/>
+        <text class="t" x="24" y="206">MPU9250 IMU</text>
+        <text class="s" x="24" y="226">I²C, gyro + accel</text>
+
+        <rect class="box hw" x="10" y="260" width="190" height="56" rx="8"/>
+        <text class="t" x="24" y="284">3× HC-SR04, LEDs</text>
+        <text class="s" x="24" y="302">front + sides, buzzer</text>
+
+        <!-- ESP32 -->
+        <rect class="box hw" x="260" y="100" width="170" height="142" rx="8"/>
+        <text class="t" x="276" y="128">ESP32</text>
+        <text class="s" x="276" y="150">Wheel speed PI loop</text>
+        <text class="s" x="276" y="168">Mahony IMU fusion</text>
+        <text class="s" x="276" y="186">Avoidance reflex</text>
+        <text class="s" x="276" y="204">Turn / stop LEDs</text>
+
+        <line x1="200" y1="51" x2="258" y2="120" marker-end="url(#a)" marker-start="url(#a)"/>
+        <line x1="200" y1="131" x2="258" y2="150" marker-end="url(#a)"/>
+        <line x1="200" y1="211" x2="258" y2="190" marker-end="url(#a)"/>
+        <line x1="200" y1="288" x2="258" y2="225" marker-end="url(#a)" marker-start="url(#a)"/>
+
+        <!-- Wi-Fi link -->
+        <line x1="430" y1="150" x2="508" y2="150" marker-end="url(#a)"/>
+        <line x1="508" y1="190" x2="430" y2="190" marker-end="url(#a)"/>
+        <text class="lbl" x="436" y="140">LDS1 :9900</text>
+        <text class="lbl" x="436" y="172">HBT1 :9902</text>
+        <text class="lbl" x="436" y="210">HBC1 :9901</text>
+
+        <!-- bridge -->
+        <rect class="box" x="510" y="100" width="190" height="142" rx="8"/>
+        <text class="t" x="524" y="128">ROS 2 bridge</text>
+        <text class="s" x="524" y="150">udp_lidar_receiver → /scan</text>
+        <text class="s" x="524" y="168">hoverboard_udp_bridge</text>
+        <text class="s" x="524" y="186">→ /odom, /imu/data</text>
+        <text class="s" x="524" y="204">→ /ultrasonic/*, /lights/*</text>
+        <text class="s" x="524" y="222">← /cmd_vel</text>
+
+        <!-- stack -->
+        <rect class="box" x="760" y="20" width="190" height="62" rx="8"/>
+        <text class="t" x="774" y="46">EKF</text>
+        <text class="s" x="774" y="66">odom + gyro → /odom/filtered</text>
+
+        <rect class="box" x="760" y="100" width="190" height="62" rx="8"/>
+        <text class="t" x="774" y="126">Cartographer</text>
+        <text class="s" x="774" y="146">map → odom, /map</text>
+
+        <rect class="box" x="760" y="180" width="190" height="62" rx="8"/>
+        <text class="t" x="774" y="206">Nav2</text>
+        <text class="s" x="774" y="226">planner, controller → /cmd_vel</text>
+
+        <rect class="box" x="760" y="260" width="190" height="56" rx="8"/>
+        <text class="t" x="774" y="284">Web page / Android</text>
+        <text class="s" x="774" y="302">rosbridge :9090</text>
+
+        <path d="M700 130 C 730 130, 730 51, 758 51" marker-end="url(#a)"/>
+        <line x1="700" y1="140" x2="758" y2="131" marker-end="url(#a)"/>
+        <path d="M758 211 C 730 211, 730 222, 702 222" marker-end="url(#a)"/>
+        <line x1="855" y1="258" x2="855" y2="244" marker-end="url(#a)"/>
+      </svg>
+    </div>
+
+    <div class="grid" style="margin-top:1rem">
+      <div class="card"><h3>LiDAR over UDP</h3><p><code>"LDS1"</code> datagrams carry little-endian millimetre ranges. The scan is mirrored with a negative <code>angle_increment</code>, so the data is never reordered.</p></div>
+      <div class="card"><h3>Telemetry &amp; commands</h3><p><code>HBT1</code> packets carry wheel ticks, sonar, light state and IMU data. <code>HBC1</code> packets carry wheel RPM commands. The ESP32 works in RPM and ticks; the ROS side converts to metres.</p></div>
+      <div class="card"><h3>One source of geometry</h3><p>Wheel radius, separation and speed limits are set only in <code>hoverboard_base.yaml</code>. Bridge topics are relative names, so you can run several robots in separate namespaces.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="hardware">
+  <div class="wrap">
+    <h2>Hardware</h2>
+    <p class="sub">Parts and the values the software is configured with.</p>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Part</th><th>Details</th></tr></thead>
+        <tbody>
+          <tr><td>Drive base</td><td>Hoverboard mainboard with EmanuelFeru FOC firmware and two hub motors. Wheel radius 0.096 m (measured). Max 0.5 m/s per wheel.</td></tr>
+          <tr><td>Encoders</td><td>Hall sensors, 15 pole pairs × 6 states = 90 ticks/rev</td></tr>
+          <tr><td>Controller</td><td>ESP32 on Wi-Fi with a per-wheel PI speed loop</td></tr>
+          <tr><td>LiDAR</td><td>LDROBOT LD14, 360° 2D scan, published as <code>/scan</code> in frame <code>base_scan</code></td></tr>
+          <tr><td>IMU</td><td>MPU9250 on I²C (SDA 21 / SCL 22, 0x68). Gyro + accel only, because the hub motor magnets ruin the compass. Gyro bias is learned at standstill.</td></tr>
+          <tr><td>Ultrasonic</td><td>3× HC-SR04 (front, left, right)</td></tr>
+          <tr><td>Indicators</td><td>Left/right turn and back stop LEDs, buzzer</td></tr>
+          <tr><td>Chassis model</td><td><code>hoverboard.urdf</code>: 0.33 m chassis, caster, sonar and IMU links</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <h2>Get started</h2>
+    <p class="sub">On a ROS 2 Humble machine with <code>rmw_cyclonedds_cpp</code>. Run one navigation stack at a time.</p>
+    <div class="steps">
+      <div class="step"><div>
+        <h3>Build</h3>
+<pre><code>cd ~/robot_ws &amp;&amp; colcon build
+source ~/robot_ws/install/local_setup.bash</code></pre>
+      </div></div>
+      <div class="step"><div>
+        <h3>Bring up the robot</h3>
+<pre><code>ros2 launch robot_bringup robot_bringup.launch.py        # base + LiDAR + EKF + URDF</code></pre>
+      </div></div>
+      <div class="step"><div>
+        <h3>Build a map and save it</h3>
+<pre><code>ros2 launch robot_cartographer cartographer_nav.launch.py
+ros2 run robot_cartographer save_map ~/m_map</code></pre>
+      </div></div>
+      <div class="step"><div>
+        <h3>Navigate on the saved map</h3>
+<pre><code>ros2 launch robot_cartographer cartographer_nav.launch.py map:=$HOME/m_map.pbstream</code></pre>
+      </div></div>
+      <div class="step"><div>
+        <h3>Or drive it from a browser</h3>
+<pre><code>sudo apt install ros-humble-rosbridge-suite
+ros2 launch robot_web_nav web_nav.launch.py stack:=cartographer map:=$HOME/m_map.pbstream
+# open http://&lt;robot-pc-ip&gt;:8000</code></pre>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+<section id="status">
+  <div class="wrap">
+    <h2>Project status</h2>
+    <div class="note">
+      <strong>Work in progress.</strong> The software stack is complete, but the robot is still being calibrated on real hardware:
+      <ul class="status">
+        <li><code>wheel_separation_m</code> (0.18 m) is not verified yet. It will be calibrated once the LiDAR is mounted on the chassis.</li>
+        <li>The IMU pose in the URDF is a placeholder until the board is mounted.</li>
+        <li>No camera is fitted yet. The vision and mediapipe packages have only been tested on recorded video.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Built with ROS 2 Humble, Cartographer, Nav2, robot_localization and rosbridge.
+    Drive-base packages are ported from the Yahboom ROS 2 stack.
+  </div>
+</footer>
+
+</body>
+</html>

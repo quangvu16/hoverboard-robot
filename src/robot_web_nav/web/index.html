@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Robot Web Nav</title>
+<style>
+/* Map fills the left; status + controls on the right; stacks on a phone. */
+:root {
+  --bg: #eef1ee; --surface: #ffffff; --sunk: #e3e8e4; --fg: #17201c; --muted: #5a6861; --line: #cfd7d1;
+  --accent: #1f5fd1; --accent-soft: #dfe8fa; --goal: #d97706; --ok: #2f7d4f; --ok-soft: #dcefe2;
+  --bad: #c2410c; --bad-soft: #fbe7dc; --warn: #a16207; --warn-soft: #fbf0d2;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", "DejaVu Sans Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101512; --surface: #171e1a; --sunk: #1f2823; --fg: #e3ebe5; --muted: #9aaba1; --line: #2e3b34;
+    --accent: #7aa5ff; --accent-soft: #1d2a45; --goal: #fbbf24; --ok: #6fcf94; --ok-soft: #1b3325;
+    --bad: #ff9a62; --bad-soft: #3a2418; --warn: #facc15; --warn-soft: #3a3214;
+    color-scheme: dark;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.45 var(--ui); }
+.app { height: 100%; display: grid; grid-template-columns: minmax(0, 1fr) 320px; grid-template-rows: auto minmax(0, 1fr); }
+header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--surface); }
+header h1 { font-size: 1rem; margin: 0 8px 0 0; letter-spacing: -0.01em; }
+.pill { font: 500 0.75rem var(--mono); padding: 3px 9px; border-radius: 999px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.info { background: var(--accent-soft); color: var(--accent); }
+
+.mapwrap { position: relative; min-width: 0; min-height: 0; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; background: var(--sunk); }
+canvas.pan { cursor: grab; }
+.overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; padding: 16px; text-align: center; color: var(--muted); }
+.tools { position: absolute; left: 12px; top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
+.tools .seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.tools button { font: 500 0.85rem var(--ui); border: 0; background: transparent; color: var(--fg); padding: 7px 11px; cursor: pointer; }
+.tools button + button { border-left: 1px solid var(--line); }
+.tools button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.hint { position: absolute; left: 12px; bottom: 12px; right: 12px; font-size: 0.8rem; color: var(--muted); pointer-events: none; }
+.hint span { background: var(--surface); padding: 4px 8px; border-radius: 6px; border: 1px solid var(--line); }
+
+aside { border-left: 1px solid var(--line); background: var(--surface); overflow-y: auto; padding: 16px; display: grid; gap: 18px; align-content: start; }
+h2 { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); font-size: 0.85rem; }
+dd { margin: 0; font: 0.88rem var(--mono); font-variant-numeric: tabular-nums; text-align: right; }
+.state { font: 600 1.25rem var(--ui); display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.msg { font-size: 0.85rem; color: var(--muted); min-height: 1.2em; }
+button.big { width: 100%; font: 600 0.95rem var(--ui); padding: 11px; border-radius: 8px; border: 0; cursor: pointer; }
+button.cancel { background: var(--bad); color: #fff; }
+button.cancel:disabled { background: var(--sunk); color: var(--muted); cursor: default; }
+.spots { display: grid; gap: 6px; }
+.spot { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; font-size: 0.88rem; }
+.spot small { color: var(--muted); font-family: var(--mono); font-size: 0.75rem; display: block; }
+.spot button, .row button { font: 500 0.8rem var(--ui); padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.spot button.go { background: var(--accent); border-color: var(--accent); color: #fff; }
+.row { display: flex; gap: 6px; }
+.row input { flex: 1; min-width: 0; font: 0.88rem var(--ui); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.empty { font-size: 0.85rem; color: var(--muted); }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+@media (max-width: 760px) {
+  .app { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 58vh auto; height: auto; }
+  aside { border-left: 0; border-top: 1px solid var(--line); overflow: visible; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Robot Web Nav</h1>
+    <span class="pill" id="pConn">connecting…</span>
+    <span class="pill" id="pStack">stack ?</span>
+    <span class="pill" id="pNav">Nav2 ?</span>
+    <span class="pill" id="pMap">no map</span>
+  </header>
+
+  <div class="mapwrap">
+    <canvas id="map" aria-label="Map. Click to place a goal, drag to set its heading."></canvas>
+    <div class="overlay" id="overlay">Waiting for /map…</div>
+    <div class="tools">
+      <div class="seg" role="group" aria-label="Click mode">
+        <button id="mGoal" aria-pressed="true" title="Click = go there, drag = also set heading (G)">Goal</button>
+        <button id="mPose" aria-pressed="false" title="Tell localization where the robot is (P)">Set pose</button>
+        <button id="mPan" aria-pressed="false" title="Drag to move the map (M)">Pan</button>
+      </div>
+      <div class="seg">
+        <button id="zIn" title="Zoom in">+</button>
+        <button id="zOut" title="Zoom out">−</button>
+        <button id="zFit" title="Fit map">Fit</button>
+        <button id="zRobot" title="Centre on robot">Robot</button>
+      </div>
+    </div>
+    <div class="hint"><span id="hint">Goal: click where the robot should go; drag to choose the heading.</span></div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Navigation</h2>
+      <div class="state"><span class="dot" id="sDot"></span><span id="sState">idle</span></div>
+      <div class="msg" id="sMsg"></div>
+      <dl>
+        <dt>Goal</dt><dd id="sGoal">—</dd>
+        <dt>Distance left</dt><dd id="sDist">—</dd>
+        <dt>ETA</dt><dd id="sEta">—</dd>
+        <dt>Driving for</dt><dd id="sTime">—</dd>
+        <dt>Recoveries</dt><dd id="sRec">—</dd>
+      </dl>
+    </section>
+    <button class="big cancel" id="btnCancel" disabled>Cancel goal</button>
+    <section>
+      <h2>Robot</h2>
+      <dl>
+        <dt>x, y</dt><dd id="rXY">—</dd>
+        <dt>Heading</dt><dd id="rYaw">—</dd>
+        <dt>Pose age</dt><dd id="rAge">—</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Saved spots</h2>
+      <div class="spots" id="spots"></div>
+      <div class="row" style="margin-top:8px">
+        <input id="spotName" placeholder="Name, e.g. kitchen" maxlength="30">
+        <button id="spotSave" title="Save the robot's current position">Save here</button>
+      </div>
+    </section>
+    <section>
+      <h2>Connection</h2>
+      <dl><dt>Websocket</dt><dd id="cUrl">—</dd></dl>
+    </section>
+  </aside>
+</div>
+
+<script src="roslib.min.js"></script>
+<script>
+'use strict';
+// ------------------------------------------------------------ connection
+const qs = new URLSearchParams(location.search);
+const WS_URL = qs.get('ws') || `ws://${location.hostname || 'localhost'}:9090`;
+const $ = id => document.getElementById(id);
+$('cUrl').textContent = WS_URL;
+
+const ros = new ROSLIB.Ros();
+let connected = false;
+function connect() { setPill('pConn', 'connecting…', ''); ros.connect(WS_URL); }
+ros.on('connection', () => { connected = true; setPill('pConn', 'connected', 'ok'); subscribeAll(); });
+ros.on('error', () => setPill('pConn', 'no rosbridge', 'bad'));
+ros.on('close', () => {
+  connected = false; setPill('pConn', 'disconnected', 'bad'); unsubscribeAll();
+  setTimeout(connect, 2000);
+});
+
+function setPill(id, text, cls) { const el = $(id); el.textContent = text; el.className = 'pill' + (cls ? ' ' + cls : ''); }
+
+// ------------------------------------------------------------ topics
+const T = (name, type, extra) => new ROSLIB.Topic(Object.assign({ ros, name, messageType: type }, extra || {}));
+const tMap = T('/map', 'nav_msgs/msg/OccupancyGrid', { throttle_rate: 2000, queue_length: 1 });
+const tPose = T('/web/robot_pose', 'geometry_msgs/msg/PoseStamped', { throttle_rate: 100, queue_length: 1 });
+const tStatus = T('/web/nav_status', 'std_msgs/msg/String');
+const tPlan = T('/plan', 'nav_msgs/msg/Path', { throttle_rate: 500, queue_length: 1 });
+const tGoal = T('/web/goal', 'geometry_msgs/msg/PoseStamped');
+const tCancel = T('/web/cancel', 'std_msgs/msg/Empty');
+const tInit = T('/initialpose', 'geometry_msgs/msg/PoseWithCovarianceStamped');
+
+function subscribeAll() {
+  tMap.subscribe(onMap); tPose.subscribe(onPose); tStatus.subscribe(onStatus); tPlan.subscribe(onPlan);
+}
+function unsubscribeAll() { [tMap, tPose, tStatus, tPlan].forEach(t => { try { t.unsubscribe(); } catch (e) {} }); }
+
+// ------------------------------------------------------------ state
+let map = null;          // {W, H, r, x0, y0, img}
+let view = null;         // {s, ox, oy}: screen = o + cell * s (y flipped)
+let robot = null;        // {x, y, yaw, t}
+let plan = [];           // [[x, y], ...]
+let goal = null;         // {x, y, yaw}
+let status = null, statusT = 0;
+let mode = 'goal';
+let drag = null;         // {kind:'arrow'|'pan', ...}
+
+const yawOf = q => Math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z));
+const quat = yaw => ({ x: 0, y: 0, z: Math.sin(yaw / 2), w: Math.cos(yaw / 2) });
+const deg = r => (r * 180 / Math.PI).toFixed(0) + '°';
+
+// ------------------------------------------------------------ canvas
+const cv = $('map'), ctx = cv.getContext('2d');
+let cssW = 0, cssH = 0;
+function resize() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cssW = r.width; cssH = r.height;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  draw();
+}
+new ResizeObserver(resize).observe(cv);
+
+function toScreen(wx, wy) {
+  const cx = (wx - map.x0) / map.r, cy = (wy - map.y0) / map.r;
+  return [view.ox + cx * view.s, view.oy + (map.H - cy) * view.s];
+}
+function toWorld(sx, sy) {
+  const cx = (sx - view.ox) / view.s, cy = map.H - (sy - view.oy) / view.s;
+  return [map.x0 + cx * map.r, map.y0 + cy * map.r];
+}
+function fit() {
+  if (!map) return;
+  const s = Math.min(cssW / map.W, cssH / map.H) * 0.95;
+  view = { s, ox: (cssW - map.W * s) / 2, oy: (cssH - map.H * s) / 2 };
+  draw();
+}
+function zoom(f, sx = cssW / 2, sy = cssH / 2) {
+  if (!view) return;
+  const s = Math.max(0.2, Math.min(60, view.s * f)), k = s / view.s;
+  view = { s, ox: sx - (sx - view.ox) * k, oy: sy - (sy - view.oy) * k };
+  draw();
+}
+
+// ------------------------------------------------------------ messages
+function onMap(m) {
+  const { width: W, height: H, resolution: r, origin } = m.info;
+  const off = document.createElement('canvas'); off.width = W; off.height = H;
+  const octx = off.getContext('2d'), img = octx.createImageData(W, H), d = m.data;
+  for (let y = 0; y < H; y++) {
+    const row = (H - 1 - y) * W;
+    for (let x = 0; x < W; x++) {
+      const v = d[y * W + x], i = (row + x) * 4;
+      let c;
+      if (v < 0) c = 200;                           // unknown
+      else c = Math.round(250 - (v / 100) * 222);   // free 250 .. occupied 28
+      img.data[i] = c; img.data[i + 1] = c + (v < 0 ? 4 : 0); img.data[i + 2] = c + (v < 0 ? 10 : 0); img.data[i + 3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+  const first = !map || map.W !== W || map.H !== H || map.r !== r;
+  const old = map;
+  map = { W, H, r, x0: origin.position.x, y0: origin.position.y, img: off };
+  if (first && !old) fit();
+  else if (first && view && old) {
+    // map grew (Cartographer): keep the same world point under the same pixel
+    const [sx, sy] = [view.ox + ((map.x0 - old.x0) / r) * view.s, view.oy + (old.H - (map.y0 - old.y0) / r - map.H) * view.s];
+    view = { s: view.s, ox: sx, oy: sy };
+  }
+  $('overlay').hidden = true;
+  setPill('pMap', `map ${W}×${H} @ ${(r * 100).toFixed(0)} cm`, 'ok');
+  draw();
+}
+function onPose(m) {
+  robot = { x: m.pose.position.x, y: m.pose.position.y, yaw: yawOf(m.pose.orientation), t: performance.now() };
+  $('rXY').textContent = `${robot.x.toFixed(2)}, ${robot.y.toFixed(2)} m`;
+  $('rYaw').textContent = deg(robot.yaw);
+  draw();
+}
+function onPlan(m) { plan = m.poses.map(p => [p.pose.position.x, p.pose.position.y]); draw(); }
+
+const STATE_LOOK = {
+  idle: ['', 'Idle'], sending: ['info', 'Sending…'], active: ['info', 'Driving'],
+  succeeded: ['ok', 'Arrived'], aborted: ['bad', 'Failed'], canceled: ['warn', 'Cancelled'],
+  rejected: ['bad', 'Rejected'], unavailable: ['bad', 'Nav2 not running'],
+};
+const DOT = { '': 'var(--muted)', info: 'var(--accent)', ok: 'var(--ok)', bad: 'var(--bad)', warn: 'var(--warn)' };
+function onStatus(m) {
+  try { status = JSON.parse(m.data); } catch (e) { return; }
+  statusT = performance.now();
+  const [cls, label] = STATE_LOOK[status.state] || ['', status.state];
+  $('sState').textContent = label; $('sDot').style.background = DOT[cls];
+  $('sMsg').textContent = status.message || '';
+  goal = status.goal;
+  $('sGoal').textContent = goal ? `${goal.x.toFixed(2)}, ${goal.y.toFixed(2)} · ${deg(goal.yaw)}` : '—';
+  const live = status.state === 'active';
+  $('sDist').textContent = live && status.distance_remaining != null ? status.distance_remaining.toFixed(2) + ' m' : '—';
+  $('sEta').textContent = live && status.eta_s ? status.eta_s.toFixed(0) + ' s' : '—';
+  $('sTime').textContent = live && status.nav_time_s != null ? status.nav_time_s.toFixed(0) + ' s' : '—';
+  $('sRec').textContent = live && status.recoveries != null ? status.recoveries : '—';
+  $('btnCancel').disabled = !(status.state === 'active' || status.state === 'sending');
+  setPill('pStack', 'stack ' + status.stack, 'info');
+  setPill('pNav', status.server_ready ? 'Nav2 ready' : 'Nav2 not running', status.server_ready ? 'ok' : 'bad');
+  if (!['active', 'sending'].includes(status.state)) plan = [];
+  draw();
+}
+setInterval(() => {
+  if (connected && performance.now() - statusT > 3000) setPill('pNav', 'web_nav_bridge silent', 'bad');
+  $('rAge').textContent = robot ? ((performance.now() - robot.t) / 1000).toFixed(1) + ' s' : '—';
+  draw();
+}, 1000);
+
+// ------------------------------------------------------------ commands
+function stamp() { const ms = Date.now(); return { sec: Math.floor(ms / 1000), nanosec: (ms % 1000) * 1e6 }; }
+function sendGoal(x, y, yaw) {
+  tGoal.publish(new ROSLIB.Message({
+    header: { frame_id: 'map', stamp: stamp() },
+    pose: { position: { x, y, z: 0 }, orientation: quat(yaw) },
+  }));
+  goal = { x, y, yaw }; draw();
+}
+function sendInitialPose(x, y, yaw) {
+  const cov = new Array(36).fill(0); cov[0] = 0.25; cov[7] = 0.25; cov[35] = 0.0685;
+  tInit.publish(new ROSLIB.Message({
+    header: { frame_id: 'map', stamp: stamp() },
+    pose: { pose: { position: { x, y, z: 0 }, orientation: quat(yaw) }, covariance: cov },
+  }));
+  flash(`Initial pose sent: ${x.toFixed(2)}, ${y.toFixed(2)} · ${deg(yaw)}`);
+}
+$('btnCancel').onclick = () => tCancel.publish(new ROSLIB.Message({}));
+
+function flash(text) { $('sMsg').textContent = text; }
+
+// ------------------------------------------------------------ pointer
+function setMode(m) {
+  mode = m;
+  $('mGoal').setAttribute('aria-pressed', m === 'goal'); $('mPose').setAttribute('aria-pressed', m === 'pose');
+  $('mPan').setAttribute('aria-pressed', m === 'pan');
+  cv.classList.toggle('pan', m === 'pan');
+  $('hint').textContent = {
+    goal: 'Goal: click where the robot should go; drag to choose the heading.',
+    pose: 'Set pose: click where the robot really is; drag the way it faces.',
+    pan: 'Pan: drag to move the map; scroll or +/− to zoom.',
+  }[m];
+}
+$('mGoal').onclick = () => setMode('goal'); $('mPose').onclick = () => setMode('pose'); $('mPan').onclick = () => setMode('pan');
+$('zIn').onclick = () => zoom(1.4); $('zOut').onclick = () => zoom(1 / 1.4); $('zFit').onclick = fit;
+$('zRobot').onclick = () => {
+  if (!robot || !view) return;
+  const [sx, sy] = toScreen(robot.x, robot.y);
+  view.ox += cssW / 2 - sx; view.oy += cssH / 2 - sy; draw();
+};
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'g') setMode('goal'); else if (e.key === 'p') setMode('pose'); else if (e.key === 'm') setMode('pan');
+  else if (e.key === 'Escape') { drag = null; draw(); }
+});
+
+function local(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+cv.addEventListener('pointerdown', e => {
+  if (!map || !view) return;
+  cv.setPointerCapture(e.pointerId);
+  const [sx, sy] = local(e);
+  if (mode === 'pan' || e.button === 1 || e.button === 2) drag = { kind: 'pan', sx, sy, ox: view.ox, oy: view.oy };
+  else drag = { kind: 'arrow', sx, sy, ex: sx, ey: sy };
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const [sx, sy] = local(e);
+  if (drag.kind === 'pan') { view.ox = drag.ox + sx - drag.sx; view.oy = drag.oy + sy - drag.sy; }
+  else { drag.ex = sx; drag.ey = sy; }
+  draw();
+});
+cv.addEventListener('pointerup', e => {
+  if (!drag) return;
+  const d = drag; drag = null;
+  if (d.kind === 'arrow') {
+    const [wx, wy] = toWorld(d.sx, d.sy);
+    let yaw;
+    if (Math.hypot(d.ex - d.sx, d.ey - d.sy) > 10) yaw = Math.atan2(-(d.ey - d.sy), d.ex - d.sx);
+    else if (mode === 'goal' && robot) yaw = Math.atan2(wy - robot.y, wx - robot.x);   // face the way it drove
+    else yaw = robot ? robot.yaw : 0;
+    if (mode === 'goal') sendGoal(wx, wy, yaw); else sendInitialPose(wx, wy, yaw);
+  }
+  draw();
+});
+cv.addEventListener('pointercancel', () => { drag = null; draw(); });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('wheel', e => { e.preventDefault(); const [sx, sy] = local(e); zoom(e.deltaY < 0 ? 1.15 : 1 / 1.15, sx, sy); }, { passive: false });
+
+// ------------------------------------------------------------ drawing
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function arrow(x, y, yaw, len, color, width) {
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = width;
+  const ex = x + Math.cos(yaw) * len, ey = y - Math.sin(yaw) * len;
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(ex, ey); ctx.stroke();
+  const a = 0.5, h = Math.max(7, len * 0.3);
+  ctx.beginPath(); ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - h * Math.cos(yaw - a), ey + h * Math.sin(yaw - a));
+  ctx.lineTo(ex - h * Math.cos(yaw + a), ey + h * Math.sin(yaw + a)); ctx.closePath(); ctx.fill();
+}
+function draw() {
+  if (!cssW) return;
+  ctx.clearRect(0, 0, cssW, cssH);
+  if (!map || !view) return;
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(map.img, view.ox, view.oy, map.W * view.s, map.H * view.s);
+  const px = 1 / map.r * view.s;   // screen px per metre
+
+  // 1 m scale bar
+  ctx.fillStyle = css('--fg'); ctx.font = '12px ' + css('--mono');
+  ctx.fillRect(cssW - 20 - px, cssH - 46, px, 3); ctx.fillText('1 m', cssW - 20 - px, cssH - 52);
+
+  if (plan.length > 1) {
+    ctx.strokeStyle = css('--accent'); ctx.lineWidth = 3; ctx.lineJoin = 'round'; ctx.beginPath();
+    plan.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
+    ctx.stroke();
+  }
+  if (goal) {
+    const [gx, gy] = toScreen(goal.x, goal.y);
+    ctx.fillStyle = css('--goal'); ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 2 * Math.PI); ctx.fill();
+    arrow(gx, gy, goal.yaw, Math.max(22, 0.4 * px), css('--goal'), 3);
+  }
+  if (robot) {
+    const stale = performance.now() - robot.t > 2000;
+    const [rx, ry] = toScreen(robot.x, robot.y), rad = Math.max(7, 0.18 * px);
+    const col = stale ? css('--muted') : css('--accent');
+    ctx.fillStyle = col; ctx.globalAlpha = 0.25; ctx.beginPath(); ctx.arc(rx, ry, rad, 0, 2 * Math.PI); ctx.fill();
+    ctx.globalAlpha = 1; ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
+    arrow(rx, ry, robot.yaw, rad * 1.6, col, 3);
+  }
+  if (drag && drag.kind === 'arrow') {
+    const yaw = Math.hypot(drag.ex - drag.sx, drag.ey - drag.sy) > 10 ? Math.atan2(-(drag.ey - drag.sy), drag.ex - drag.sx) : null;
+    const col = mode === 'goal' ? css('--goal') : css('--ok');
+    ctx.fillStyle = col; ctx.beginPath(); ctx.arc(drag.sx, drag.sy, 6, 0, 2 * Math.PI); ctx.fill();
+    if (yaw !== null) arrow(drag.sx, drag.sy, yaw, Math.hypot(drag.ex - drag.sx, drag.ey - drag.sy), col, 3);
+  }
+}
+
+// ------------------------------------------------------------ saved spots (this browser only)
+const KEY = 'robot_web_nav.spots';
+function loadSpots() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { return []; } }
+function storeSpots(s) { try { localStorage.setItem(KEY, JSON.stringify(s)); } catch (e) {} }
+function renderSpots() {
+  const list = $('spots'), spots = loadSpots();
+  list.innerHTML = '';
+  if (!spots.length) { list.innerHTML = '<div class="empty">None yet. Drive the robot somewhere, name it, and press “Save here”.</div>'; return; }
+  spots.forEach((s, i) => {
+    const row = document.createElement('div'); row.className = 'spot';
+    const name = document.createElement('div');
+    name.textContent = s.name;
+    const sm = document.createElement('small'); sm.textContent = `${s.x.toFixed(2)}, ${s.y.toFixed(2)} · ${deg(s.yaw)}`; name.appendChild(sm);
+    const go = document.createElement('button'); go.className = 'go'; go.textContent = 'Go';
+    go.onclick = () => sendGoal(s.x, s.y, s.yaw);
+    const del = document.createElement('button'); del.textContent = '✕'; del.title = 'Delete';
+    del.onclick = () => { const a = loadSpots(); a.splice(i, 1); storeSpots(a); renderSpots(); };
+    row.append(name, go, del); list.appendChild(row);
+  });
+}
+$('spotSave').onclick = () => {
+  if (!robot) { flash('No robot pose yet, so nothing to save.'); return; }
+  const name = $('spotName').value.trim() || `Spot ${loadSpots().length + 1}`;
+  const a = loadSpots(); a.push({ name, x: robot.x, y: robot.y, yaw: robot.yaw }); storeSpots(a);
+  $('spotName').value = ''; renderSpots();
+};
+renderSpots();
+connect();
+</script>
+</body>
+</html>

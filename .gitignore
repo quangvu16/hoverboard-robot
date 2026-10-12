@@ -1,0 +1,21 @@
+# colcon output (top-level workspace and the nested ldlidar workspace)
+/build/
+/install/
+/log/
+/src/ldlidar_ros2_ws/build/
+/src/ldlidar_ros2_ws/install/
+/src/ldlidar_ros2_ws/log/
+
+# over GitHub's 100 MB file limit
+/hoverboard_robot_ros.zip
+
+# Android build output and machine-local SDK path
+/android_app/.gradle/
+/android_app/app/build/
+/android_app/build/
+/android_app/local.properties
+/android_app/build.log
+
+# Python
+__pycache__/
+*.pyc

@@ -1,0 +1,4 @@
+int32 qr_id         # Input: QR code ID
+---
+geometry_msgs/Pose  qr_pose # Output: Position (Pose)
+

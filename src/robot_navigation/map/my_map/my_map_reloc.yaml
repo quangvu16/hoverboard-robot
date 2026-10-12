@@ -1,0 +1,10 @@
+image: D:/ViettelPost/program/software/my_map_reloc.pgm
+resolution: 0.080000
+origin: [-1.760000, -0.080000, 0.000000]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+width: 26
+height: 32
+intensity_threshold: 0.000000
+intensities:
