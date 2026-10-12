@@ -355,6 +355,26 @@ footer.site code { background: color-mix(in srgb, var(--inv-fg) 12%, transparent
 footer.site .mark { font-family: var(--display); font-weight: 500; letter-spacing: -0.06em; line-height: .85; font-size: clamp(3.4rem, 13.5vw, 15rem); margin-top: clamp(40px, 6vw, 90px); white-space: nowrap; overflow: hidden; }
 footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-top: 20px; padding-top: 18px; border-top: 1px solid color-mix(in srgb, var(--inv-fg) 18%, transparent); font: .78rem var(--mono); color: var(--inv-muted); }
 
+/* video card */
+.video { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2.2fr); gap: 24px 48px; align-items: end; padding-top: clamp(40px, 6vw, 88px); }
+@media (max-width: 860px) { .video { grid-template-columns: minmax(0, 1fr); } }
+.video-head { display: grid; gap: 14px; align-content: end; }
+.video-head h2 { font-size: clamp(2.2rem, 4.6vw, 4.6rem); }
+.video-card { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: var(--r-lg); overflow: hidden; background: #0f1d07; box-shadow: var(--shadow); text-decoration: none; color: #f3f3e9; }
+.video-card img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .4s; opacity: .92; }
+.video-card:hover img { transform: scale(1.04); opacity: 1; }
+.video-card .play { position: absolute; left: 50%; top: 50%; width: clamp(64px, 8vw, 104px); aspect-ratio: 1; margin: 0; transform: translate(-50%, -50%); border-radius: 50%; background: var(--lime); color: #0f1d07; display: grid; place-items: center; box-shadow: 0 0 0 10px rgba(144, 241, 136, .25); transition: transform .3s ease-in-out, box-shadow .3s ease-in-out; }
+.video-card:hover .play { transform: translate(-50%, -50%) scale(1.08); box-shadow: 0 0 0 16px rgba(144, 241, 136, .2); }
+.video-card .video-cap { position: absolute; left: 16px; right: 16px; bottom: 16px; display: grid; gap: 2px; background: rgba(15, 29, 7, .72); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-radius: var(--r-md); padding: 12px 16px; max-width: 520px; }
+.video-card .video-cap b { font-weight: 500; letter-spacing: -0.01em; }
+.video-card .video-cap span { font: .74rem var(--mono); color: #b9c4ab; }
+@media (max-width: 640px) {
+  .video-card { aspect-ratio: auto; }
+  .video-card img { aspect-ratio: 16 / 9; height: auto; }
+  .video-card .play { top: calc((100vw - 32px) * 9 / 32); }
+  .video-card .video-cap { position: static; max-width: none; border-radius: 0; background: #0f1d07; }
+}
+
 /* reveal on scroll (only when JS marks it; content stays visible without JS) */
 .rv { opacity: 0; transform: translateY(28px); transition: opacity .8s ease, transform .8s cubic-bezier(.2, .8, .2, 1); }
 .rv.in { opacity: 1; transform: none; }
@@ -413,6 +433,7 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
         <div class="cta">
           <a class="btn lime" href="#idea">Explore the build</a>
           <a class="btn ghost" href="#install">Get started</a>
+          <a class="btn ghost" href="#video">Watch the video</a>
         </div>
       </div>
       <figure class="hero-media">
@@ -432,6 +453,18 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
         <div role="listitem"><span class="n">INSTALL</span><b>Two firmwares, one workspace</b><small>Mainboard FOC, the ESP32 sketch, and <code>~/robot_ws</code> built with colcon.</small></div>
         <div role="listitem"><span class="n">DEPLOY</span><b>Wi-Fi, no cables</b><small>The ESP32 streams UDP, and a systemd service starts bringup at boot.</small></div>
         <div role="listitem"><span class="n">OPERATE</span><b>Map, save, navigate</b><small>Cartographer or slam_toolbox, then Nav2 on the saved map.</small></div>
+      </div>
+      <div class="video" id="video">
+        <div class="video-head">
+          <div class="eyebrow"><span class="num">(▶)</span><span>Video</span></div>
+          <h2>Watch it drive.</h2>
+          <p class="muted">The robot on YouTube: hoverboard base, ESP32 and LiDAR, mapping and navigating.</p>
+        </div>
+        <a class="video-card" href="https://www.youtube.com/watch?v=447QFAo13s0" target="_blank" rel="noopener" aria-label="Watch Hoverboard + ESP32 + LiDAR = Navigation Robot on YouTube (opens in a new tab)">
+          <img src="https://img.youtube.com/vi/447QFAo13s0/maxresdefault.jpg" onerror="this.onerror=null;this.src='https://img.youtube.com/vi/447QFAo13s0/hqdefault.jpg'" alt="Video thumbnail: the hoverboard robot" loading="lazy">
+          <span class="play" aria-hidden="true"><svg viewBox="0 0 24 24" width="30" height="30"><path d="M8 5.5v13l11-6.5z" fill="currentColor"/></svg></span>
+          <span class="video-cap"><b>Hoverboard + ESP32 + LiDAR = Navigation Robot</b><span>YouTube · opens in a new tab</span></span>
+        </a>
       </div>
     </section>
 
@@ -1608,7 +1641,7 @@ document.querySelectorAll('.copy').forEach(function (btn) {
 
   /* blocks fade up as they scroll in */
   if (hasIO && !reduce) {
-    var items = document.querySelectorAll('section.chapter > *, .phases > div, .stats > div, .hero-media, .closing > *, .panel, .part, ol.steps > li, .timeline > div');
+    var items = document.querySelectorAll('section.chapter > *, .phases > div, .stats > div, .hero-media, .closing > *, .video > *, .panel, .part, ol.steps > li, .timeline > div');
     var rio = new IntersectionObserver(function (es) {
       es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); rio.unobserve(e.target); } });
     }, { rootMargin: '0px 0px -8% 0px' });
