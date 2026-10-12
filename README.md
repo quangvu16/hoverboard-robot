@@ -10,6 +10,12 @@ an EKF and RViz. You can also drive the robot from a web page or an Android app.
 This repository is the PC-side colcon workspace (`~/robot_ws`). A full illustrated guide
 is in [`website/index.html`](website/index.html): open it in a browser.
 
+## Video
+
+[![Hoverboard + ESP32 + LiDAR = navigation robot (YouTube)](https://img.youtube.com/vi/447QFAo13s0/hqdefault.jpg)](https://www.youtube.com/watch?v=447QFAo13s0)
+
+Watch the robot on YouTube: [Hoverboard + ESP32 + LiDAR = Navigation Robot](https://www.youtube.com/watch?v=447QFAo13s0).
+
 ## How it works
 
 ```
