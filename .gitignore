@@ -19,3 +19,6 @@
 # Python
 __pycache__/
 *.pyc
+
+# ESP32 Wi-Fi credentials (copy secrets.h.example to secrets.h)
+/firmware/*/secrets.h

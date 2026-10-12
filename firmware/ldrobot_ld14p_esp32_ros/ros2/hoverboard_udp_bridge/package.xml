@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>hoverboard_udp_bridge</name>
+  <version>1.0.0</version>
+  <description>
+    Bridges an ESP32 running the ldrobot_ld14p_esp32_ros firmware to ROS 2.
+    Turns "HBT1" UDP telemetry into odometry, joint states and battery state,
+    and turns /cmd_vel into "HBC1" wheel-RPM commands.
+  </description>
+  <maintainer email="quangvu82@gmail.com">vu</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

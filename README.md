@@ -53,8 +53,27 @@ The ESP32 only knows RPM and ticks. All geometry in metres lives in one file,
 Connect only GND, TX and RX between the ESP32 and the mainboard. Leave the mainboard's
 VCC pin open: it can carry 15 V.
 
-The ESP32 firmware (`ldrobot_ld14p_esp32_mpu9250_ros` Arduino sketch) is not in this
-repository yet.
+## ESP32 firmware
+
+Two Arduino sketches live in [`firmware/`](firmware/). Both use only the ESP32 Arduino core,
+with no third-party libraries:
+
+| Sketch | IMU | Notes |
+|---|---|---|
+| [`ldrobot_ld14p_esp32_mpu9250_ros`](firmware/ldrobot_ld14p_esp32_mpu9250_ros) | MPU9250 | **In use.** Gyro + accel fusion on the ESP32 |
+| [`ldrobot_ld14p_esp32_ros`](firmware/ldrobot_ld14p_esp32_ros) | BNO055 | The original. Its [`HOVERBOARD.md`](firmware/ldrobot_ld14p_esp32_ros/HOVERBOARD.md) is the full build and wiring guide |
+
+All pins, ports and the PC's address (`DEST_IP`) are set in each sketch's `config.h`.
+Wi-Fi credentials are kept out of git: copy `secrets.h.example` to `secrets.h` in the
+sketch folder and fill in your network. Then flash at 115200 baud (faster uploads fail on
+this board):
+
+```bash
+S=~/robot_ws/firmware/ldrobot_ld14p_esp32_mpu9250_ros
+cp $S/secrets.h.example $S/secrets.h   # then edit WIFI_SSID / WIFI_PASS
+arduino-cli compile --fqbn esp32:esp32:esp32 $S
+arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/ttyUSB0 $S
+```
 
 ## Repository layout
 
@@ -69,6 +88,7 @@ repository yet.
 | `src/robot_web_nav` | Web page for navigation over rosbridge |
 | `src/hoverboard_*` | Ports of the Yahboom packages: gamepad, laser behaviours, camera, multi-robot. See [`src/HOVERBOARD_PACKAGES.md`](src/HOVERBOARD_PACKAGES.md) |
 | `src/auto_mapper`, `src/m-explore-ros2`, `src/full_coverage_path_planner` | Vendored frontier explorers and a coverage planner |
+| `firmware/` | The ESP32 Arduino sketches (not built by colcon) |
 | `android_app/` | Robot Nav, a Kotlin Android app (see its [README](android_app/README.md)) |
 | `tools/` | Calibration scripts and the systemd autostart files |
 | `website/` | The project's web page |

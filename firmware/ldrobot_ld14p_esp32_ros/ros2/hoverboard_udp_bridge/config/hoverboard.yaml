@@ -1,0 +1,46 @@
+hoverboard_udp_bridge:
+  ros__parameters:
+    # The ESP32 running the firmware. Read it off the serial console at boot:
+    #   "WiFi up as 192.168.1.6, ..."
+    # Give it a static DHCP reservation, or this breaks every time the lease
+    # changes - UDP gives no error when commands go nowhere.
+    esp32_ip: "192.168.1.6"
+
+    # Must match HB_CMD_PORT / HB_TELEM_PORT in the firmware.
+    cmd_port: 9901
+    telem_port: 9902
+
+    # --- robot geometry: the numbers that decide whether odometry is true ---
+    # Stock 6.5" hoverboard hub motors. Measure your own if they are not stock.
+    wheel_diameter: 0.165
+    # Distance between the two wheel contact patches. Measure it - do not
+    # trust the chassis drawing. This one number sets how far the robot thinks
+    # it has turned, and a few percent of error shows up as a map that will
+    # not close a loop.
+    wheel_track: 0.5
+    # Hall ticks per wheel revolution, matching hoverboard_driver/config.hpp
+    # and the firmware's HB_ENCODER_TPR.
+    encoder_tpr: 90
+
+    # 150 RPM on 0.165 m wheels is about 1.3 m/s. Start at 30 for first tests.
+    max_wheel_rpm: 150.0
+
+    # How often the setpoint is resent. The firmware stops the wheels after
+    # 1 s of silence and the mainboard faults after ~0.5 s, so this must stay
+    # comfortably above 2 Hz. 20 Hz matches what the mainboard expects.
+    cmd_rate: 20.0
+    # Treat /cmd_vel as stale after this long and coast to a stop.
+    cmd_vel_timeout: 0.5
+
+    odom_frame: "odom"
+    base_frame: "base_link"
+    # Set false when an EKF (robot_localization) owns odom -> base_link.
+    # Two nodes publishing the same transform makes TF unusable.
+    publish_tf: true
+
+    left_wheel_joint: "left_wheel_joint"
+    right_wheel_joint: "right_wheel_joint"
+
+    # Flip if a wheel reports backwards. Change one at a time, on blocks.
+    invert_left: false
+    invert_right: false
