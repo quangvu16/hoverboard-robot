@@ -50,7 +50,7 @@ The ESP32 only knows RPM and ticks. All geometry in metres lives in one file,
 |---|---|
 | Hoverboard mainboard + 2 hub motors | [hoverboard-firmware-hack-FOC](https://github.com/EmanuelFeru/hoverboard-firmware-hack-FOC), `VARIANT_USART`. Wheel radius 96.15 mm, 90 ticks/rev |
 | 36 V hoverboard battery | Powers the mainboard and motors |
-| ESP32-WROOM DevKit | The only processor on the robot |
+| ESP32-WROOM DevKit, or ESP32-S3-DevKitC-1 v1.1 | The only processor on the robot (pick the matching sketch below) |
 | LDROBOT LD14P LiDAR | 360° scan, ~6 Hz |
 | MPU9250 IMU | Gyro + accelerometer on I²C (SDA 21, SCL 22). No compass: the hub-motor magnets corrupt it |
 | 3× HC-SR04 | Front, left, right. The ESP32 backs off below 350 mm (front) and turns away below 50 mm (sides) |
@@ -61,13 +61,14 @@ VCC pin open: it can carry 15 V.
 
 ## ESP32 firmware
 
-Two Arduino sketches live in [`firmware/`](firmware/). Both use only the ESP32 Arduino core,
+Three Arduino sketches live in [`firmware/`](firmware/). Both use only the ESP32 Arduino core,
 with no third-party libraries:
 
-| Sketch | IMU | Notes |
-|---|---|---|
-| [`ldrobot_ld14p_esp32_mpu9250_ros`](firmware/ldrobot_ld14p_esp32_mpu9250_ros) | MPU9250 | **In use.** Gyro + accel fusion on the ESP32 |
-| [`ldrobot_ld14p_esp32_ros`](firmware/ldrobot_ld14p_esp32_ros) | BNO055 | The original. Its [`HOVERBOARD.md`](firmware/ldrobot_ld14p_esp32_ros/HOVERBOARD.md) is the full build and wiring guide |
+| Sketch | Board | IMU | Notes |
+|---|---|---|---|
+| [`ldrobot_ld14p_esp32_mpu9250_ros`](firmware/ldrobot_ld14p_esp32_mpu9250_ros) | ESP32-WROOM | MPU9250 | **In use.** Gyro + accel fusion on the ESP32 |
+| [`ldrobot_ld14p_esp32s3_mpu9250_ros`](firmware/ldrobot_ld14p_esp32s3_mpu9250_ros) | ESP32-S3-DevKitC-1 v1.1 | MPU9250 | Same firmware, new pin map (below) |
+| [`ldrobot_ld14p_esp32_ros`](firmware/ldrobot_ld14p_esp32_ros) | ESP32-WROOM | BNO055 | The original. Its [`HOVERBOARD.md`](firmware/ldrobot_ld14p_esp32_ros/HOVERBOARD.md) is the full build and wiring guide |
 
 All pins, ports and the PC's address (`DEST_IP`) are set in each sketch's `config.h`.
 Wi-Fi credentials are kept out of git: copy `secrets.h.example` to `secrets.h` in the
@@ -80,6 +81,34 @@ cp $S/secrets.h.example $S/secrets.h   # then edit WIFI_SSID / WIFI_PASS
 arduino-cli compile --fqbn esp32:esp32:esp32 $S
 arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/ttyUSB0 $S
 ```
+
+### ESP32-S3-DevKitC-1 v1.1
+
+The S3 build follows Espressif's
+[v1.1 user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html).
+The S3 has no GPIO 22-25, its flash and octal PSRAM take 26-37, and v1.1 has the RGB LED
+on GPIO 38. So these signals moved (`config.h` refuses a bad pin at compile time):
+
+| Signal | ESP32-WROOM | ESP32-S3 | Header |
+|---|---|---|---|
+| Mainboard RX / TX | 26 / 27 | 6 / 7 | J1-6 / J1-7 |
+| Buzzer | 25 | 21 | J3-18 |
+| Front HC-SR04 TRIG / ECHO | 32 / 33 | 1 / 2 | J3-4 / J3-5 |
+| Left HC-SR04 ECHO | 19 | 10 | J1-16 |
+| Right HC-SR04 ECHO | 23 | 11 | J1-17 |
+| MPU9250 SDA / SCL | 21 / 22 | 8 / 9 | J1-12 / J1-15 |
+| Unchanged | LiDAR 16, LEDs 5 / 13 / 14, side TRIGs 17 / 18 | | |
+
+Plug into the **UART** micro-USB port (it shows up as `/dev/ttyUSB0`), not the native USB port:
+
+```bash
+S=~/robot_ws/firmware/ldrobot_ld14p_esp32s3_mpu9250_ros
+cp $S/secrets.h.example $S/secrets.h   # then edit WIFI_SSID / WIFI_PASS
+arduino-cli compile --fqbn esp32:esp32:esp32s3 $S
+arduino-cli upload  --fqbn esp32:esp32:esp32s3:UploadSpeed=115200 -p /dev/ttyUSB0 $S
+```
+
+If the upload doesn't start, hold **Boot**, tap **Reset**, then release **Boot**.
 
 ## Repository layout
 
