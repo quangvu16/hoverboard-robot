@@ -79,6 +79,8 @@
 HardwareSerial HbSerial(2);
 Hoverboard     hoverboard;
 
+#include "web_drive.h"   // after hoverboard.h: the drive page (web_drive.h)
+
 static const uint16_t HB_TELEM_LEN = 74;
 static const uint16_t HB_CMD_LEN   = 12;
 
@@ -216,6 +218,7 @@ static void hbReceiveCommands() {
 
   if (!got)
     return;
+  ros_last_ms = millis();
 
   float want_l = 0.0f, want_r = 0.0f;
   if (flags & HBC_ENABLE) {
@@ -223,7 +226,8 @@ static void hbReceiveCommands() {
     want_r = (float)rpm_r;
   }
 
-  hoverboard.setWheelRPM(want_l, want_r);
+  // The web stick (web_drive.h) wins while it is held.
+  if (!webDriveOwns()) hoverboard.setWheelRPM(want_l, want_r);
   hbSetBuzzer((flags & HBC_BUZZER) != 0);
 }
 
@@ -233,7 +237,7 @@ static void hbReceiveCommands() {
 // never waits for the next datagram, and a back-off stops the moment the
 // sonar clears instead of lingering as the new setpoint.
 //
-// Only while ROS is asking for motion. With no request (boot, ROS gone, or an
+// Only while ROS (or the web stick) is asking for motion. With no request (boot, ROS gone, or an
 // explicit stop) the wheels stay still: backing off is blind, and a robot
 // that reverses by itself at power-on because something is near the sonar is
 // worse than one that simply refuses to go forward.
@@ -305,6 +309,7 @@ static void hoverboardTask(void * arg) {
   uint32_t last_telem_ms = 0;
   uint32_t last_imu_ms = 0;
   uint32_t last_log_ms = 0;
+  uint32_t last_web_ms = 0;
 
   for (;;) {
     hoverboard.poll();    // drains the UART, enforces the command timeout
@@ -345,8 +350,14 @@ static void hoverboardTask(void * arg) {
       Serial.println("hoverboard: WiFi down, command socket closed");
     }
 
+    webDriveApply(hoverboard);   // web stick command, or hand back to ROS
     hbApplyReflex();
     lightsUpdate(hoverboard);
+    if (millis() - last_web_ms >= WEB_STATUS_PERIOD_MS) {
+      last_web_ms = millis();
+      webDrivePublish(hoverboard, sonar.obstacleNear(), sonarReflexName(),
+                      sonar.distanceMm(), sonarLeft.distanceMm(), sonarRight.distanceMm());
+    }
     // Same safety rule as the wheels: no commands, no noise.
     if (hoverboard.isTimedOut()) hbSetBuzzer(false);
     hoverboard.transmit();

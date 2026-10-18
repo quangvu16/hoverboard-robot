@@ -82,6 +82,25 @@ arduino-cli compile --fqbn esp32:esp32:esp32 $S
 arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/ttyUSB0 $S
 ```
 
+### Drive from a phone, no PC needed
+
+Both MPU9250 sketches serve their own drive page. Open `http://<esp32-ip>/` or
+`http://hoverboard.local/` on a phone on the same Wi-Fi (the Serial Monitor prints the IP at
+boot), and drive with the stick, the RPM sliders or `W` `A` `S` `D`.
+
+- The page talks to the board over a WebSocket on `ws://<esp32-ip>/ws`. It sends
+  `D <rpm_left> <rpm_right>` ten times a second while you hold the stick, and `S` to stop.
+  The board answers with a JSON status five times a second: battery, wheel RPM, the three
+  sonars, the reflex, and who has the wheels.
+- Commands take the same path as ROS's HBC1, so the sonar reflex and the mainboard timeout
+  still apply. Each wheel is capped at `WEB_DRIVE_MAX_RPM` (60 rpm).
+- While you hold the stick it overrides ROS. 0.5 s after the last web command, the wheels
+  are zeroed and ROS gets them back. Cancel a Nav2 goal first if you don't want it to resume.
+- Closing the page, switching apps or losing Wi-Fi stops the robot.
+- Anyone on the Wi-Fi can open the page. Set `WEB_DRIVE_ENABLED 0` in `config.h` to turn it
+  off. It is written with the ESP32 core only (WiFi, ESPmDNS, mbedtls), so the sketches
+  still need no third-party libraries.
+
 ### ESP32-S3-DevKitC-1 v1.1
 
 The S3 build follows Espressif's

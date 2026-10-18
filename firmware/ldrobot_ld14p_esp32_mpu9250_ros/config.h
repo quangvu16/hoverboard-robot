@@ -378,6 +378,27 @@ static const uint32_t IMU_I2C_HZ = 400000;     // 100000 on long or noisy wires
 // errors.
 static const uint32_t IMU_RETRY_MS = 2000;
 
+// ------------------------------------------------------------- web drive
+// Drive page + WebSocket served by this board (web_drive.h): open
+// http://<board-ip>/ or http://WEB_DRIVE_HOSTNAME.local/ on a phone on the same
+// Wi-Fi and drive with the stick, no PC needed. The commands go through the
+// same path as HBC1, so the sonar reflex and the command timeout still apply.
+// Anyone on the Wi-Fi can open the page: 0 turns it off.
+#ifndef WEB_DRIVE_ENABLED
+#define WEB_DRIVE_ENABLED 1
+#endif
+#define WEB_DRIVE_HOSTNAME "hoverboard"          // mDNS name, http://hoverboard.local/
+static const uint16_t WEB_DRIVE_PORT = 80;
+// Hard cap per wheel for the page, whatever it asks. 60 rpm on a 6.5" wheel
+// is ~0.6 m/s; the page's sliders stop here too.
+static const float    WEB_DRIVE_MAX_RPM = 60.0f;
+// The stick owns the wheels this long after its last message (it sends 10 a
+// second while held); then the wheels are zeroed once and ROS (HBC1) gets
+// them back. Shorter than HB_CMD_TIMEOUT_MS.
+static const uint32_t WEB_DRIVE_TIMEOUT_MS = 500;
+static const uint32_t WEB_STATUS_PERIOD_MS = 200;   // status to the page, 5 Hz
+static_assert(WEB_DRIVE_TIMEOUT_MS < HB_CMD_TIMEOUT_MS, "web hand-back must beat the mainboard timeout");
+
 // ------------------------------------------------- resolved at boot, not edited
 // DEST_IP parsed once in setup(). Shared by the LiDAR sender (core 1) and the
 // hoverboard link (core 0); written before either task starts, read-only after.

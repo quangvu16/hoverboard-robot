@@ -5,6 +5,7 @@
 //   mainboard <--UART2--> ESP32 <--"HBT1" 9902 / "HBC1" 9901--> hoverboard_udp_bridge_node
 //                                                     /odom, TF, /cmd_vel, /ultrasonic/*
 //   MPU9250 --I2C--> ESP32 (inside HBT1) ------------------------------>  /imu/data
+//   phone --http://<board>/ + ws://<board>/ws--> ESP32 (drive stick, no PC)
 //
 // ROS 2 side (robot_ws):
 //
@@ -25,14 +26,17 @@
 //   lidar_ld14.h   LD14 decoder, scan binning, LDS1 sender
 //   mpu9250.h      MPU9250 IMU (I2C raw + ESP32 fusion), in every HBT1
 //   hb_link.h      HBT1/HBC1 datagrams and the hoverboard task
+//   web_drive.h    drive page + WebSocket server (no PC needed)
+//   web_page.h     the page itself
 //
 // Task layout. Core 0: lidarTask (LiDAR UART) and hoverboardTask (mainboard
 // UART, sonar, IMU, hoverboard socket), the latter at higher priority - a late
 // scan costs one revolution, a late command frame lets the mainboard hit its
 // own serial timeout. Core 1: loop(), which owns the WiFi association and the
-// scan send, since a WiFi send can stall for milliseconds.
+// scan send, since a WiFi send can stall for milliseconds; and webTask (the
+// drive page), which hands its commands to hoverboardTask through a mailbox.
 //
-// No third-party libraries: only the ESP32 core (WiFi, Wire).
+// No third-party libraries: only the ESP32 core (WiFi, Wire, ESPmDNS, mbedtls).
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -90,6 +94,7 @@ void setup() {
 
   xTaskCreatePinnedToCore(lidarTask, "lidar", 4096, NULL, 2, NULL, 0);
   xTaskCreatePinnedToCore(hoverboardTask, "hover", 4096, NULL, 3, NULL, 0);
+  webDriveBegin();   // core 1, below loop() in importance
 
   Serial.printf("WiFi \"%s\" -> ROS 2 at %s (scan %d, telemetry %d, commands %d)\n",
                 WIFI_SSID, DEST_IP, DEST_PORT, HB_TELEM_PORT, HB_CMD_PORT);
