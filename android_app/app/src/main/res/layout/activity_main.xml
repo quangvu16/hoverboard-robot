@@ -153,6 +153,120 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <!-- Drive by hand: /cmd_vel_manual while the stick is held. -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    style="@style/Section"
+                    android:layout_width="0dp"
+                    android:layout_weight="1"
+                    android:layout_marginTop="0dp"
+                    android:layout_marginBottom="0dp"
+                    android:text="DRIVE" />
+
+                <TextView android:id="@+id/pSonar" style="@style/Pill" android:layout_marginEnd="0dp" android:text="sonar ?" />
+            </LinearLayout>
+
+            <com.hoverboard.robotnav.JoystickView
+                android:id="@+id/stick"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="8dp"
+                android:contentDescription="Drive stick. Drag to drive, release to stop." />
+
+            <TextView
+                android:id="@+id/dCmd"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="monospace"
+                android:gravity="center_horizontal"
+                android:text="stopped"
+                android:textColor="@color/fg"
+                android:textSize="14sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="84dp"
+                    android:layout_height="wrap_content"
+                    android:text="Max speed"
+                    android:textColor="@color/muted"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/dV"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="9" />
+
+                <TextView
+                    android:id="@+id/dVo"
+                    android:layout_width="84dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:textColor="@color/fg"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:layout_width="84dp"
+                    android:layout_height="wrap_content"
+                    android:text="Max turn"
+                    android:textColor="@color/muted"
+                    android:textSize="14sp" />
+
+                <SeekBar
+                    android:id="@+id/dW"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="18" />
+
+                <TextView
+                    android:id="@+id/dWo"
+                    android:layout_width="84dp"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:gravity="end"
+                    android:textColor="@color/fg"
+                    android:textSize="13sp" />
+            </LinearLayout>
+
+            <Button
+                android:id="@+id/btnStop"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:layout_marginTop="10dp"
+                android:background="@drawable/rounded"
+                android:backgroundTint="@color/bad"
+                android:stateListAnimator="@null"
+                android:text="Stop"
+                android:textAllCaps="false"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+
+            <TextView style="@style/Section" android:text="NAVIGATION" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

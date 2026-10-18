@@ -17,6 +17,7 @@ import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TableLayout
 import android.widget.TableRow
 import android.widget.TextView
@@ -30,8 +31,9 @@ import kotlin.math.sin
 
 /**
  * Navigate the hoverboard robot through rosbridge (robot_web_nav on the PC):
- * same topics as the web page - /map, /plan, /web/robot_pose, /web/nav_status in;
- * /web/goal, /web/cancel, /initialpose out.
+ * same topics as the web page - /map, /plan, /web/robot_pose, /web/nav_status,
+ * /ultrasonic/obstacle_near in; /web/goal, /web/cancel, /initialpose and
+ * /cmd_vel_manual (the drive stick) out.
  */
 class MainActivity : Activity(), RosBridge.Listener {
 
@@ -55,6 +57,11 @@ class MainActivity : Activity(), RosBridge.Listener {
     private lateinit var btnCancel: Button
     private val detail = HashMap<String, TextView>()
 
+    private val drive = Drive()
+    private lateinit var stick: JoystickView
+    private lateinit var pSonar: TextView
+    private lateinit var dCmd: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -72,6 +79,8 @@ class MainActivity : Activity(), RosBridge.Listener {
         ros.subscribe("/web/robot_pose", "geometry_msgs/msg/PoseStamped", throttleMs = 100)
         ros.subscribe("/web/nav_status", "std_msgs/msg/String")
         ros.subscribe("/plan", "nav_msgs/msg/Path", throttleMs = 500)
+        ros.subscribe("/ultrasonic/obstacle_near", "std_msgs/msg/Bool", throttleMs = 200)
+        setupDrive()
 
         mapView.onPick = { mode, x, y, yaw -> onPick(mode, x, y, yaw) }
         findViewById<Button>(R.id.mGoal).setOnClickListener { setMode(MapView.Mode.GOAL) }
@@ -94,11 +103,20 @@ class MainActivity : Activity(), RosBridge.Listener {
         val url = prefs.getString("url", null)
         if (url == null) askAddress() else ros.connect(url)
         ui.post(ticker)
+        ui.post(driveTicker)
+    }
+
+    // Leaving the app (home, another app, screen off) lets go of the stick and
+    // sends the stop burst while the socket is still open.
+    override fun onPause() {
+        super.onPause()
+        stopDriving()
     }
 
     override fun onStop() {
         super.onStop()
         ui.removeCallbacks(ticker)
+        ui.removeCallbacks(driveTicker)
         ros.disconnect()
     }
 
@@ -135,6 +153,7 @@ class MainActivity : Activity(), RosBridge.Listener {
             RosBridge.State.CONNECTED -> pill(pConn, "connected", R.color.ok, R.color.ok_soft)
             RosBridge.State.CONNECTING -> pill(pConn, "connecting…", R.color.muted, R.color.sunk)
             RosBridge.State.DISCONNECTED -> {
+                pill(pSonar, "sonar ?", R.color.muted, R.color.sunk)
                 pill(pConn, "no rosbridge", R.color.bad, R.color.bad_soft)
                 if (detail.isNotEmpty() && detail != "stopped") sMsg.text = "Connection: $detail"
             }
@@ -175,6 +194,13 @@ class MainActivity : Activity(), RosBridge.Listener {
             "/web/nav_status" -> {
                 val st = try { JSONObject(msg.getString("data")) } catch (e: Exception) { return }
                 ui.post { onStatus(st) }
+            }
+            "/ultrasonic/obstacle_near" -> {
+                val near = msg.optBoolean("data")
+                ui.post {
+                    if (near) pill(pSonar, "obstacle ahead", R.color.warn, R.color.warn_soft)
+                    else pill(pSonar, "sonar clear", R.color.ok, R.color.ok_soft)
+                }
             }
         }
     }
@@ -236,6 +262,72 @@ class MainActivity : Activity(), RosBridge.Listener {
             }
             ui.postDelayed(this, 1000)
         }
+    }
+
+    // ---------------------------------------------------------------- manual drive
+    private fun setupDrive() {
+        stick = findViewById(R.id.stick)
+        pSonar = findViewById(R.id.pSonar)
+        dCmd = findViewById(R.id.dCmd)
+        // Publish at once on press and release; while held, driveTicker sends at RATE_HZ
+        // (touch moves arrive at 60+ Hz, too fast to forward one by one).
+        stick.onStick = { x, y ->
+            val was = drive.moving
+            drive.stick(x, y)
+            if (!was || (x == 0f && y == 0f)) driveNow()
+        }
+        findViewById<Button>(R.id.btnStop).setOnClickListener { stopDriving() }
+
+        // Speed 0.05..0.5 m/s in 0.05 steps, turn 0.2..2.0 rad/s in 0.1 steps; remembered.
+        val dV = findViewById<SeekBar>(R.id.dV); val dVo = findViewById<TextView>(R.id.dVo)
+        val dW = findViewById<SeekBar>(R.id.dW); val dWo = findViewById<TextView>(R.id.dWo)
+        fun apply() {
+            drive.maxSpeed = 0.05 + dV.progress * 0.05
+            drive.maxTurn = 0.2 + dW.progress * 0.1
+            dVo.text = String.format(Locale.US, "%.2f m/s", drive.maxSpeed)
+            dWo.text = String.format(Locale.US, "%.1f rad/s", drive.maxTurn)
+        }
+        dV.progress = prefs.getInt("drive_v", 3)      // 0.2 m/s
+        dW.progress = prefs.getInt("drive_w", 6)      // 0.8 rad/s
+        apply()
+        val listener = object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar, p: Int, fromUser: Boolean) { apply() }
+            override fun onStartTrackingTouch(s: SeekBar) {}
+            override fun onStopTrackingTouch(s: SeekBar) {
+                prefs.edit().putInt("drive_v", dV.progress).putInt("drive_w", dW.progress).apply()
+            }
+        }
+        dV.setOnSeekBarChangeListener(listener); dW.setOnSeekBarChangeListener(listener)
+    }
+
+    private val driveTicker = object : Runnable {
+        override fun run() {
+            driveNow()
+            ui.postDelayed(this, 1000L / Drive.RATE_HZ)
+        }
+    }
+
+    /** One drive step: publish what Drive says, cancel a goal when driving starts. */
+    private fun driveNow() {
+        stick.isEnabled = ros.state == RosBridge.State.CONNECTED
+        val (cmd, started) = drive.tick()
+        if (started && (navState == "active" || navState == "sending")) {
+            ros.publish("/web/cancel", "std_msgs/msg/Empty", JSONObject())
+            sMsg.text = "Goal cancelled: driving by hand."
+        }
+        if (cmd != null) {
+            ros.publish("/cmd_vel_manual", "geometry_msgs/msg/Twist", JSONObject()
+                .put("linear", JSONObject().put("x", cmd.vx).put("y", 0.0).put("z", 0.0))
+                .put("angular", JSONObject().put("x", 0.0).put("y", 0.0).put("z", cmd.wz)))
+        }
+        val now = drive.command()
+        dCmd.text = if (now.moving) String.format(Locale.US, "%.2f m/s · %.2f rad/s", now.vx, now.wz) else "stopped"
+    }
+
+    private fun stopDriving() {
+        drive.stop()
+        if (::stick.isInitialized) stick.release()   // reports (0, 0) -> driveNow()
+        driveNow()
     }
 
     // ---------------------------------------------------------------- commands
