@@ -378,6 +378,38 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
 /* reveal on scroll (only when JS marks it; content stays visible without JS) */
 .rv { opacity: 0; transform: translateY(28px); transition: opacity .8s ease, transform .8s cubic-bezier(.2, .8, .2, 1); }
 .rv.in { opacity: 1; transform: none; }
+
+/* live drive panel (chapter 09): raw rosbridge JSON over a WebSocket */
+.drive { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); gap: 28px 56px; align-items: start; margin-top: clamp(28px, 4vw, 48px); }
+@media (max-width: 860px) { .drive { grid-template-columns: minmax(0, 1fr); } }
+.drive h3 { font: 600 clamp(1.4rem, 2.2vw, 1.9rem)/1.1 var(--display); letter-spacing: -0.02em; margin: 0; }
+.drive-card { background: var(--surface); border-radius: var(--r-lg); padding: clamp(18px, 2vw, 26px); box-shadow: 0 0 0 1px var(--line), var(--shadow); display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; min-width: 0; }
+.drive-card:focus-within { box-shadow: 0 0 0 2px var(--accent), var(--shadow); }
+.drive-conn { display: flex; gap: 8px; }
+.drive-conn input { flex: 1; min-width: 0; font: .9rem var(--mono); padding: 10px 14px; border-radius: 100vw; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.drive-conn button, .drive-stop { font: 600 .9rem var(--body); border: 0; border-radius: 100vw; padding: 10px 18px; cursor: pointer; }
+.drive-conn button { background: var(--fg); color: var(--bg); white-space: nowrap; }
+.drive-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill.bad { background: var(--signal-soft); color: var(--signal); }
+.dpad { position: relative; width: min(240px, 72vw); aspect-ratio: 1; margin: 4px auto; border-radius: 50%; background: var(--sunk); box-shadow: inset 0 0 0 1px var(--line); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; outline: none; }
+.dpad:focus-visible { box-shadow: inset 0 0 0 1px var(--line), 0 0 0 3px var(--accent); }
+.dpad::before, .dpad::after { content: ""; position: absolute; background: var(--line); }
+.dpad::before { left: 50%; top: 13%; bottom: 13%; width: 1px; }
+.dpad::after { top: 50%; left: 13%; right: 13%; height: 1px; }
+.dpad .lab { position: absolute; font: 500 .66rem var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); pointer-events: none; }
+.dpad .fw { top: 8px; left: 0; right: 0; text-align: center; } .dpad .bk { bottom: 8px; left: 0; right: 0; text-align: center; }
+.dpad .lf { left: 10px; top: 50%; transform: translateY(-50%); } .dpad .rt { right: 10px; top: 50%; transform: translateY(-50%); }
+.dknob { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; border-radius: 50%; background: var(--lime); box-shadow: inset 0 0 0 2px var(--fg), 0 6px 16px -6px rgba(0, 0, 0, .45); transform: translate(-50%, -50%); transition: transform .15s ease-out; pointer-events: none; z-index: 1; }
+.dpad.on { cursor: grabbing; } .dpad.on .dknob { transition: none; }
+.dpad.off { opacity: .45; cursor: not-allowed; }
+.drive-cmd { font: .9rem var(--mono); text-align: center; }
+.dslider { display: grid; grid-template-columns: 6.2em 1fr 6em; gap: 10px; align-items: center; font-size: .88rem; color: var(--muted); }
+.dslider input { width: 100%; accent-color: var(--accent); }
+.dslider output { font: .82rem var(--mono); text-align: right; color: var(--fg); white-space: nowrap; }
+.drive-stop { background: var(--signal); color: #fff; padding: 13px; font-size: 1rem; }
+.drive-note { font-size: .82rem; color: var(--muted); margin: 0; }
+.drive-note kbd { font: .72rem var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--bg); }
+.drive-msg { font-size: .85rem; color: var(--signal); margin: 0; min-height: 1.2em; }
 </style>
 </head>
 <body>
@@ -1118,7 +1150,7 @@ ros2 launch hoverboard_ctrl joy_launch.py             <span class="c"># gamepad<
         <h2>Send the robot somewhere from a phone or laptop</h2>
       </div>
       <div class="prose stack">
-        <p>The <code>robot_web_nav</code> package serves a web page from the robot PC. Any browser on the same Wi-Fi can open it, with nothing to install. The page shows the map, the robot and its planned path. Click a spot and the robot drives there through Nav2. It works with both stacks, Cartographer or Nav2 + AMCL, and you choose which one at launch.</p>
+        <p>The <code>robot_web_nav</code> package serves a web page from the robot PC. Any browser on the same Wi-Fi can open it, with nothing to install. The page shows the map, the robot and its planned path. Click a spot and the robot drives there through Nav2, or drive it by hand with the on-screen stick. It works with both stacks, Cartographer or Nav2 + AMCL, and you choose which one at launch.</p>
       </div>
 
       <figure>
@@ -1179,6 +1211,41 @@ ros2 launch hoverboard_ctrl joy_launch.py             <span class="c"># gamepad<
         </div>
         <figcaption>The browser speaks plain JSON. <code>web_nav_bridge</code> turns Nav2's action and the TF tree into simple topics, so the page never handles either directly.</figcaption>
       </figure>
+
+      <div class="drive" id="drive">
+        <div class="prose stack">
+          <div class="eyebrow"><span class="num">(▶)</span><span>Live</span></div>
+          <h3>Drive it by hand, from this page</h3>
+          <p>The web page on the robot PC has a drive stick, and so does this page. Start the web launch on the robot PC, type its rosbridge address on the right, press <b>Connect</b>, and hold the stick. <code>stack:=none</code> is enough to drive; add a stack for the map and Nav2 goals.</p>
+          <p>Each command is a <code>geometry_msgs/Twist</code> on <code>/cmd_vel_manual</code>, sent over the websocket ten times a second while you hold the stick. That is the topic <code>rqt_robot_steering</code> uses, and the hoverboard bridge turns it into wheel RPM.</p>
+          <ul>
+            <li><b>Let go and it stops:</b> a few zero commands go out, then nothing. The bridge stops the wheels by itself 0.5 s after the last command, so a closed tab or a dropped Wi-Fi link stops the robot too.</li>
+            <li><b>Leave the page and it stops:</b> switching tab or window centres the stick at once.</li>
+            <li><b>Nav2 is cancelled:</b> grabbing the stick during a goal cancels the goal, so the two don't fight over the wheels.</li>
+            <li><b>The sonar still wins:</b> the ESP32's front reflex backs the robot off below 350 mm, whatever you command. The <i>obstacle ahead</i> pill shows it.</li>
+          </ul>
+          <p>Lift the wheels off the ground the first time. The page must be opened from a file or over plain <code>http://</code>: browsers block <code>ws://</code> from <code>https://</code> pages.</p>
+        </div>
+
+        <div class="drive-card" aria-label="Drive the robot">
+          <form class="drive-conn" id="dForm">
+            <label class="sr" for="dUrl" style="position:absolute;left:-9999px">rosbridge address</label>
+            <input id="dUrl" value="ws://192.168.1.12:9090" spellcheck="false" autocomplete="off" inputmode="url">
+            <button type="submit" id="dBtn">Connect</button>
+          </form>
+          <div class="drive-pills"><span class="pill info" id="dConn">offline</span><span class="pill info" id="dSonar">sonar ?</span><span class="pill info" id="dNav">nav ?</span></div>
+          <div class="dpad off" id="dPad" tabindex="0" role="application" aria-label="Drive stick: drag to drive, release to stop. With focus, W A S D or arrow keys drive and Space stops.">
+            <span class="lab fw">fwd</span><span class="lab bk">back</span><span class="lab lf">left</span><span class="lab rt">right</span>
+            <div class="dknob" id="dKnob"></div>
+          </div>
+          <div class="drive-cmd" id="dCmd">stopped</div>
+          <div class="dslider"><label for="dV">Max speed</label><input type="range" id="dV" min="0.05" max="0.5" step="0.05" value="0.2"><output id="dVo"></output></div>
+          <div class="dslider"><label for="dW">Max turn</label><input type="range" id="dW" min="0.2" max="2" step="0.1" value="0.8"><output id="dWo"></output></div>
+          <button class="drive-stop" type="button" id="dStop">Stop</button>
+          <p class="drive-msg" id="dMsg" role="status"></p>
+          <p class="drive-note">Click the stick first, then <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows drive and <kbd>Space</kbd> stops. The address is remembered in this browser.</p>
+        </div>
+      </div>
 
       <ol class="steps">
         <li>
@@ -1269,7 +1336,7 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
       <div class="android-intro">
         <div class="prose stack">
           <p><strong>Robot Nav</strong> is a native Android app written in Kotlin. It connects straight to rosbridge and uses the same topics as the web page, so nothing changes on the robot side: start <code>web_nav.launch.py</code> with either stack, and the app and browser can be used side by side.</p>
-          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
+          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. A drive stick under the map drives the robot by hand, with the same <a href="#drive">rules as the web stick</a>. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
           <div class="spec">
             <span>package <b>com.hoverboard.robotnav</b></span>
             <span>Android <b>8.0+ (API 26)</b></span>
@@ -1662,6 +1729,158 @@ document.querySelectorAll('.copy').forEach(function (btn) {
     }, { rootMargin: '-35% 0px -60% 0px' });
     document.querySelectorAll('section.chapter').forEach(function (sct) { cio.observe(sct); });
   }
+})();
+
+/* ------------------------------------------------ live drive (chapter 09)
+   rosbridge v2 JSON over a plain WebSocket, no library: advertise, publish,
+   subscribe. Twist on /cmd_vel_manual at 10 Hz while held, zeros on release. */
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var pad = $('dPad');
+  if (!pad) return;
+  var knob = $('dKnob'), card = pad.closest('.drive-card');
+  var KEY = 'hoverboard-robot.ws';
+  var ws = null, live = false, wanted = false, retry = null, navState = 'idle';
+  var drive = { x: 0, y: 0, pointer: null, keys: {}, zeroes: 0, moving: false };
+  var KEYMAP = { w: 'f', arrowup: 'f', s: 'b', arrowdown: 'b', a: 'l', arrowleft: 'l', d: 'r', arrowright: 'r' };
+
+  try { var saved = localStorage.getItem(KEY); if (saved) $('dUrl').value = saved; } catch (e) {}
+
+  function pill(id, text, cls) { var el = $(id); el.textContent = text; el.className = 'pill ' + cls; }
+  function say(text) { $('dMsg').textContent = text || ''; }
+  function send(o) { if (live) ws.send(JSON.stringify(o)); }
+
+  function normal(u) {
+    u = u.trim();
+    if (!/^wss?:\/\//.test(u)) u = 'ws://' + u;
+    if (!/:\d+(\/|$)/.test(u.replace(/^wss?:\/\//, ''))) u += ':9090';
+    return u;
+  }
+  function open() {
+    clearTimeout(retry);
+    var url = normal($('dUrl').value);
+    $('dUrl').value = url;
+    try { localStorage.setItem(KEY, url); } catch (e) {}
+    if (location.protocol === 'https:' && url.indexOf('ws://') === 0) {
+      say('This page is on https://, so the browser blocks ws://. Open it from a file or over http://.');
+    }
+    pill('dConn', 'connecting…', 'info');
+    var sock;
+    try { sock = new WebSocket(url); } catch (e) { pill('dConn', 'bad address', 'bad'); return; }
+    ws = sock;
+    sock.onopen = function () {
+      if (ws !== sock) return;
+      live = true; say('');
+      pill('dConn', 'connected', 'ok');
+      pad.classList.remove('off');
+      send({ op: 'advertise', topic: '/cmd_vel_manual', type: 'geometry_msgs/msg/Twist' });
+      send({ op: 'advertise', topic: '/web/cancel', type: 'std_msgs/msg/Empty' });
+      send({ op: 'subscribe', topic: '/ultrasonic/obstacle_near', type: 'std_msgs/msg/Bool', throttle_rate: 200, queue_length: 1 });
+      send({ op: 'subscribe', topic: '/web/nav_status', type: 'std_msgs/msg/String' });
+    };
+    sock.onmessage = function (ev) {
+      var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m.op !== 'publish' || !m.msg) return;
+      if (m.topic === '/ultrasonic/obstacle_near') pill('dSonar', m.msg.data ? 'obstacle ahead' : 'sonar clear', m.msg.data ? 'bad' : 'ok');
+      else if (m.topic === '/web/nav_status') {
+        try { navState = JSON.parse(m.msg.data).state || 'idle'; } catch (e) { return; }
+        pill('dNav', 'nav ' + navState, navState === 'active' ? 'ok' : 'info');
+      }
+    };
+    sock.onclose = function () {
+      if (ws !== sock) return;
+      ws = null; live = false;
+      release(); pad.classList.add('off');
+      pill('dConn', wanted ? 'no rosbridge, retrying' : 'offline', wanted ? 'bad' : 'info');
+      pill('dSonar', 'sonar ?', 'info'); pill('dNav', 'nav ?', 'info');
+      if (wanted) retry = setTimeout(open, 2000);
+    };
+  }
+  $('dForm').addEventListener('submit', function (e) {
+    e.preventDefault();
+    if (wanted) {                          // Disconnect
+      stop(); wanted = false; clearTimeout(retry);
+      $('dBtn').textContent = 'Connect';
+      if (ws) ws.close(); else pill('dConn', 'offline', 'info');
+    } else {
+      wanted = true; $('dBtn').textContent = 'Disconnect'; open();
+    }
+  });
+
+  var vMax = function () { return +$('dV').value; }, wMax = function () { return +$('dW').value; };
+  function limits() { $('dVo').textContent = vMax().toFixed(2) + ' m/s'; $('dWo').textContent = wMax().toFixed(1) + ' rad/s'; }
+  $('dV').oninput = $('dW').oninput = limits; limits();
+
+  function command() {
+    var x = drive.x, y = drive.y, k = drive.keys;
+    if (drive.pointer === null && Object.keys(k).length) {
+      y = (k.f ? 1 : 0) - (k.b ? 1 : 0);
+      x = (k.r ? 1 : 0) - (k.l ? 1 : 0);
+    }
+    return { vx: y * vMax() + 0, wz: -x * wMax() + 0 };   // stick right = turn right = -z
+  }
+  function twist(vx, wz) {
+    send({ op: 'publish', topic: '/cmd_vel_manual', msg: { linear: { x: vx, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } } });
+  }
+  function tick() {
+    var c = command(), moving = c.vx !== 0 || c.wz !== 0;
+    if (moving && !drive.moving && (navState === 'active' || navState === 'sending')) {
+      send({ op: 'publish', topic: '/web/cancel', msg: {} });
+      say('Goal cancelled: driving by hand.');
+    }
+    drive.moving = moving;
+    if (moving) { twist(c.vx, c.wz); drive.zeroes = 3; }
+    else if (drive.zeroes > 0) { twist(0, 0); drive.zeroes--; }
+    $('dCmd').textContent = moving ? c.vx.toFixed(2) + ' m/s · ' + c.wz.toFixed(2) + ' rad/s' : 'stopped';
+  }
+  setInterval(tick, 100);
+
+  function release() {
+    drive.x = drive.y = 0;
+    if (drive.pointer !== null) { try { pad.releasePointerCapture(drive.pointer); } catch (e) {} drive.pointer = null; }
+    pad.classList.remove('on'); knob.style.transform = '';
+  }
+  function stop() { release(); drive.keys = {}; drive.zeroes = 5; tick(); }
+  $('dStop').addEventListener('click', stop);
+
+  function move(e) {
+    var r = pad.getBoundingClientRect(), half = r.width / 2;
+    var x = (e.clientX - r.left - half) / half, y = -(e.clientY - r.top - half) / half;
+    var m = Math.hypot(x, y);
+    if (m > 1) { x /= m; y /= m; }
+    var travel = half * 0.7;
+    knob.style.transform = 'translate(calc(-50% + ' + (x * travel) + 'px), calc(-50% + ' + (-y * travel) + 'px))';
+    if (Math.hypot(x, y) < 0.12) x = y = 0;
+    drive.x = x; drive.y = y;
+  }
+  pad.addEventListener('pointerdown', function (e) {
+    if (!live) return;
+    e.preventDefault(); pad.focus({ preventScroll: true });
+    try { pad.setPointerCapture(e.pointerId); } catch (err) {}
+    drive.pointer = e.pointerId; pad.classList.add('on'); move(e); tick();
+  });
+  pad.addEventListener('pointermove', function (e) { if (e.pointerId === drive.pointer) move(e); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(function (ev) {
+    pad.addEventListener(ev, function (e) { if (e.pointerId === drive.pointer) { release(); tick(); } });
+  });
+
+  // Keys only while the drive card has focus, so arrows still scroll the page elsewhere.
+  card.addEventListener('keydown', function (e) {
+    if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+    if (e.key === ' ' && e.target !== $('dStop') && e.target !== $('dBtn')) { e.preventDefault(); stop(); return; }
+    var dir = KEYMAP[e.key.toLowerCase()];
+    if (!dir || (e.target.type === 'range' && e.key.indexOf('Arrow') === 0)) return;
+    e.preventDefault();
+    if (live && !drive.keys[dir]) { drive.keys[dir] = true; tick(); }
+  });
+  document.addEventListener('keyup', function (e) {
+    var dir = KEYMAP[e.key.toLowerCase()];
+    if (dir) delete drive.keys[dir];
+  });
+  card.addEventListener('focusout', function (e) { if (!card.contains(e.relatedTarget)) { drive.keys = {}; } });
+  window.addEventListener('blur', stop);
+  document.addEventListener('visibilitychange', function () { if (document.hidden) stop(); });
+
 })();
 </script>
 </body>
