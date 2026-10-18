@@ -47,8 +47,12 @@
 // but they cannot see a stray wire, so check the harness too:
 //
 //   26-32  the module's SPI flash (not on the headers).
-//   33-37  the octal PSRAM on N8R8 / N32R16V boards (35-37 are on J3 but
-//          taken; 33/34 are not broken out).
+//   33-37  the octal PSRAM on N16R8 / N8R8 / N32R16V boards (35-37 are on
+//          J3 but taken; 33/34 are not broken out).
+//
+// The S3 chip has 45 GPIOs (0-21, 26-48), but on an N16R8 module 26-37 are
+// its flash and PSRAM, which leaves 33; the boot, USB, UART0 and RGB LED pins
+// below leave 24 safe ones, of which this sketch uses 15.
 //   0, 3, 45, 46
 //          strapping pins: 0 LOW at power-on = bootloader, 3 picks the JTAG
 //          source, 45 sets the flash voltage (HIGH = 1.8 V, boot-loops),

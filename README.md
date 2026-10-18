@@ -109,6 +109,12 @@ arduino-cli compile --fqbn esp32:esp32:esp32s3 $S
 arduino-cli upload  --fqbn esp32:esp32:esp32s3:UploadSpeed=115200 -p /dev/ttyUSB0 $S
 ```
 
+The default board settings work on every DevKitC-1 variant. To use all of an
+**ESP32-S3-N16R8**'s 16 MB flash and 8 MB PSRAM (the sketch doesn't need them), use
+`--fqbn esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi` for both commands, adding
+`,UploadSpeed=115200` on the upload. Of the S3's 45 GPIOs, the N16R8 leaves 24 safe
+for wiring; see [`firmware/PINOUT.md`](firmware/PINOUT.md#how-many-gpios-the-s3-really-has).
+
 If the upload doesn't start, hold **Boot**, tap **Reset**, then release **Boot**.
 
 ## Repository layout

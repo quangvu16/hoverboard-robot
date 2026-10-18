@@ -107,7 +107,7 @@ Spare pins for later: 4, 12, 15, 39, 40, 41, 42, 47.
 
 | | ESP32-WROOM | ESP32-S3-DevKitC-1 v1.1 |
 |---|---|---|
-| Internal flash / PSRAM | 6-11 | 26-32 (flash), 33-37 (octal PSRAM on N8R8 / N32R16V) |
+| Internal flash / PSRAM | 6-11 | 26-32 (flash), 33-37 (octal PSRAM on N16R8 / N8R8 / N32R16V) |
 | Boot (strapping) pins | 0, 2, 12, 15 (12 is the dangerous one) | 0, 3, 45, 46 |
 | Serial Monitor / flashing | 1, 3 | 43, 44 |
 | Native USB | none | 19, 20 |
@@ -118,6 +118,27 @@ Spare pins for later: 4, 12, 15, 39, 40, 41, 42, 47.
 The S3 has no GPIO 22-25 at all, and 26-37 are taken by its memory. That is why the
 mainboard, buzzer, IMU, front sonar and two ECHO lines had to move. The S3 sketch's
 `config.h` refuses any pin from this table at compile time.
+
+## How many GPIOs the S3 really has
+
+The ESP32-S3 chip has **45 GPIOs**: 0-21 and 26-48 (there is no 22-25). On an
+**ESP32-S3-N16R8** module (16 MB quad flash + 8 MB octal PSRAM, the usual DevKitC-1 clone)
+not all of them are yours:
+
+| GPIOs | Count | Free for the robot? |
+|---|---|---|
+| 26-32 | 7 | No: the module's flash and PSRAM (not on the headers) |
+| 33-37 | 5 | No: octal PSRAM (35-37 are on J3 but taken; 33-34 not broken out) |
+| 0, 3, 45, 46 | 4 | No: boot (strapping) pins |
+| 19, 20 | 2 | No: native USB port |
+| 43, 44 | 2 | No: UART0, the Serial Monitor and flashing |
+| 38 | 1 | No: on-board RGB LED on v1.1 |
+| 1, 2, 4-18, 21, 39-42, 47, 48 | 24 | **Yes** |
+
+45 − 12 (memory) = 33 left on the headers, and 24 of those are safe. The robot uses 15,
+so 9 are spare: 4, 12, 15, 39, 40, 41, 42, 47 and 48. Pin 48 was the RGB LED on v1.0
+boards, which is why the sketch also refuses it. The checks are the same with or
+without PSRAM switched on in the build: the pins are wired to the PSRAM chip either way.
 
 ## Moving the robot from the ESP32 to the S3
 
