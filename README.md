@@ -87,7 +87,8 @@ arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/ttyUSB0 
 The S3 build follows Espressif's
 [v1.1 user guide](https://docs.espressif.com/projects/esp-dev-kits/en/latest/esp32s3/esp32-s3-devkitc-1/user_guide_v1.1.html).
 The S3 has no GPIO 22-25, its flash and octal PSRAM take 26-37, and v1.1 has the RGB LED
-on GPIO 38. So these signals moved (`config.h` refuses a bad pin at compile time):
+on GPIO 38. So these signals moved (`config.h` refuses a bad pin at compile time). The full side-by-side pinout, with header
+drawings of both boards, is in [`firmware/PINOUT.md`](firmware/PINOUT.md):
 
 | Signal | ESP32-WROOM | ESP32-S3 | Header |
 |---|---|---|---|
