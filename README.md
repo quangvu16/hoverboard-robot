@@ -210,8 +210,9 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=cartographer map:=$HOME/m_map
 ros2 launch robot_web_nav web_nav.launch.py stack:=amcl map:=$HOME/m_map.yaml
 ```
 
-Open `http://<robot-pc-ip>:8000` on any device on the same Wi-Fi. Click a spot to send
-the robot there, drag to set its final heading, set its pose, cancel, or save named spots.
+Open `http://<robot-pc-ip>:8000` on any device on the same Wi-Fi. Drive by hand with
+the on-screen joystick or `W` `A` `S` `D` (it publishes `/cmd_vel_manual` over the
+websocket; `stack:=none` if you only want to drive), or click a spot to send the robot there, drag to set its final heading, set its pose, cancel, or save named spots.
 The Android app in `android_app/` uses the same rosbridge websocket (`ws://<robot-pc-ip>:9090`).
 
 ## Start at boot

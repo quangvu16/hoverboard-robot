@@ -64,6 +64,24 @@ button.cancel:disabled { background: var(--sunk); color: var(--muted); cursor: d
 .row { display: flex; gap: 6px; }
 .row input { flex: 1; min-width: 0; font: 0.88rem var(--ui); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .empty { font-size: 0.85rem; color: var(--muted); }
+.pad { position: relative; width: min(220px, 70vw); aspect-ratio: 1; margin: 4px auto 10px; border-radius: 50%; background: var(--sunk); border: 1px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
+.pad::before, .pad::after { content: ""; position: absolute; background: var(--line); }
+.pad::before { left: 50%; top: 12%; bottom: 12%; width: 1px; }
+.pad::after { top: 50%; left: 12%; right: 12%; height: 1px; }
+.pad .lab { position: absolute; font: 600 0.68rem var(--ui); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; pointer-events: none; }
+.pad .fw { top: 6px; left: 0; right: 0; text-align: center; } .pad .bk { bottom: 6px; left: 0; right: 0; text-align: center; }
+.pad .lf { left: 8px; top: 50%; transform: translateY(-50%); } .pad .rt { right: 8px; top: 50%; transform: translateY(-50%); }
+.knob { position: absolute; left: 50%; top: 50%; width: 30%; aspect-ratio: 1; border-radius: 50%; background: var(--accent); box-shadow: 0 3px 10px rgb(0 0 0 / 0.25); transform: translate(-50%, -50%); transition: transform 0.15s ease-out; pointer-events: none; z-index: 1; }
+.pad.on { cursor: grabbing; } .pad.on .knob { transition: none; }
+.pad.off { opacity: 0.45; cursor: not-allowed; }
+.slider { display: grid; grid-template-columns: 5.5em 1fr 5.8em; gap: 8px; align-items: center; font-size: 0.85rem; color: var(--muted); }
+.slider input { width: 100%; accent-color: var(--accent); }
+.slider output { font: 0.82rem var(--mono); text-align: right; color: var(--fg); white-space: nowrap; }
+button.stop { background: var(--bad); color: #fff; margin-top: 10px; }
+.drivehead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+.drivehead h2 { margin: 0; }
+.keys { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
+.keys kbd { font: 0.72rem var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--bg); }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 @media (max-width: 760px) {
@@ -102,6 +120,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
   </div>
 
   <aside>
+    <section aria-labelledby="dHead">
+      <div class="drivehead"><h2 id="dHead">Drive</h2><span class="pill" id="pSonar">sonar ?</span></div>
+      <div class="pad off" id="pad" role="application" aria-label="Joystick: drag to drive, release to stop">
+        <span class="lab fw">fwd</span><span class="lab bk">back</span><span class="lab lf">left</span><span class="lab rt">right</span>
+        <div class="knob" id="knob"></div>
+      </div>
+      <dl>
+        <dt>Command</dt><dd id="dCmd">stopped</dd>
+      </dl>
+      <div class="slider" style="margin-top:8px"><label for="dV">Max speed</label><input type="range" id="dV" min="0.05" max="0.5" step="0.05" value="0.2"><output id="dVo"></output></div>
+      <div class="slider"><label for="dW">Max turn</label><input type="range" id="dW" min="0.2" max="2" step="0.1" value="0.8"><output id="dWo"></output></div>
+      <button class="big stop" id="btnStop">Stop</button>
+      <div class="keys">Keys: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to drive, <kbd>Space</kbd> to stop. Release = stop.</div>
+    </section>
     <section>
       <h2>Navigation</h2>
       <div class="state"><span class="dot" id="sDot"></span><span id="sState">idle</span></div>
@@ -168,11 +200,19 @@ const tPlan = T('/plan', 'nav_msgs/msg/Path', { throttle_rate: 500, queue_length
 const tGoal = T('/web/goal', 'geometry_msgs/msg/PoseStamped');
 const tCancel = T('/web/cancel', 'std_msgs/msg/Empty');
 const tInit = T('/initialpose', 'geometry_msgs/msg/PoseWithCovarianceStamped');
+// Manual driving: same topic as rqt_robot_steering. The hoverboard bridge
+// stops the wheels by itself 0.5 s after the last command (cmd_timeout_s).
+const tDrive = T('/cmd_vel_manual', 'geometry_msgs/msg/Twist');
+const tNear = T('/ultrasonic/obstacle_near', 'std_msgs/msg/Bool', { throttle_rate: 200, queue_length: 1 });
 
 function subscribeAll() {
   tMap.subscribe(onMap); tPose.subscribe(onPose); tStatus.subscribe(onStatus); tPlan.subscribe(onPlan);
+  tNear.subscribe(onNear); $('pad').classList.remove('off');
 }
-function unsubscribeAll() { [tMap, tPose, tStatus, tPlan].forEach(t => { try { t.unsubscribe(); } catch (e) {} }); }
+function unsubscribeAll() {
+  [tMap, tPose, tStatus, tPlan, tNear].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
+  stopDriving(); $('pad').classList.add('off'); setPill('pSonar', 'sonar ?', '');
+}
 
 // ------------------------------------------------------------ state
 let map = null;          // {W, H, r, x0, y0, img}
@@ -330,10 +370,12 @@ $('zRobot').onclick = () => {
   view.ox += cssW / 2 - sx; view.oy += cssH / 2 - sy; draw();
 };
 document.addEventListener('keydown', e => {
-  if (e.target.tagName === 'INPUT') return;
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+  if (driveKey(e, true)) return;
   if (e.key === 'g') setMode('goal'); else if (e.key === 'p') setMode('pose'); else if (e.key === 'm') setMode('pan');
-  else if (e.key === 'Escape') { drag = null; draw(); }
+  else if (e.key === 'Escape') { drag = null; stopDriving(); draw(); }
 });
+document.addEventListener('keyup', e => driveKey(e, false));
 
 function local(e) { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
 cv.addEventListener('pointerdown', e => {
@@ -415,6 +457,88 @@ function draw() {
     if (yaw !== null) arrow(drag.sx, drag.sy, yaw, Math.hypot(drag.ex - drag.sx, drag.ey - drag.sy), col, 3);
   }
 }
+
+// ------------------------------------------------------------ manual drive
+// Joystick or keys -> geometry_msgs/Twist on /cmd_vel_manual at 10 Hz while
+// held, then a few zero commands on release. Nothing is sent while idle, so
+// Nav2's /cmd_vel is not disturbed unless you grab the stick (which also
+// cancels the active goal: the bridge takes whichever command came last).
+const DRIVE_HZ = 10, DEADZONE = 0.12;
+const KEYMAP = { w: 'f', arrowup: 'f', s: 'b', arrowdown: 'b', a: 'l', arrowleft: 'l', d: 'r', arrowright: 'r' };
+const drive = { x: 0, y: 0, pointer: null, keys: new Set(), zeroes: 0, moving: false };
+const pad = $('pad'), knob = $('knob');
+const vMax = () => +$('dV').value, wMax = () => +$('dW').value;
+function showLimits() { $('dVo').textContent = vMax().toFixed(2) + ' m/s'; $('dWo').textContent = wMax().toFixed(1) + ' rad/s'; }
+$('dV').oninput = $('dW').oninput = showLimits; showLimits();
+
+function driveCommand() {
+  let x = drive.x, y = drive.y;   // stick: x right, y forward, both -1..1
+  if (drive.pointer === null && drive.keys.size) {
+    const k = drive.keys;
+    y = (k.has('f') ? 1 : 0) - (k.has('b') ? 1 : 0);
+    x = (k.has('r') ? 1 : 0) - (k.has('l') ? 1 : 0);
+  }
+  return { vx: y * vMax(), wz: -x * wMax() };   // stick right = turn right = negative z
+}
+function publishTwist(vx, wz) {
+  if (!connected) return;
+  tDrive.publish(new ROSLIB.Message({ linear: { x: vx, y: 0, z: 0 }, angular: { x: 0, y: 0, z: wz } }));
+}
+function driveTick() {
+  const { vx, wz } = driveCommand(), moving = vx !== 0 || wz !== 0;
+  if (moving && !drive.moving && status && ['active', 'sending'].includes(status.state)) {
+    tCancel.publish(new ROSLIB.Message({}));
+    flash('Goal cancelled: driving by hand.');
+  }
+  drive.moving = moving;
+  if (moving) { publishTwist(vx, wz); drive.zeroes = 3; }
+  else if (drive.zeroes > 0) { publishTwist(0, 0); drive.zeroes--; }
+  $('dCmd').textContent = moving ? `${vx.toFixed(2)} m/s · ${wz.toFixed(2)} rad/s` : 'stopped';
+}
+setInterval(driveTick, 1000 / DRIVE_HZ);
+
+function stopDriving() {
+  drive.x = drive.y = 0; drive.keys.clear();
+  if (drive.pointer !== null) { try { pad.releasePointerCapture(drive.pointer); } catch (e) {} drive.pointer = null; }
+  pad.classList.remove('on'); knob.style.transform = '';
+  drive.zeroes = 5; driveTick();
+}
+$('btnStop').onclick = stopDriving;
+
+function padMove(e) {
+  const r = pad.getBoundingClientRect(), half = r.width / 2;
+  let x = (e.clientX - r.left - half) / half, y = -(e.clientY - r.top - half) / half;
+  const m = Math.hypot(x, y);
+  if (m > 1) { x /= m; y /= m; }
+  const travel = half * 0.7;   // knob centre stays inside the pad
+  knob.style.transform = `translate(calc(-50% + ${x * travel}px), calc(-50% + ${-y * travel}px))`;
+  if (Math.hypot(x, y) < DEADZONE) x = y = 0;
+  drive.x = x; drive.y = y;
+}
+pad.addEventListener('pointerdown', e => {
+  if (!connected) return;
+  e.preventDefault();
+  try { pad.setPointerCapture(e.pointerId); } catch (err) {}   // keeps the drag when the finger leaves the pad
+  drive.pointer = e.pointerId; pad.classList.add('on'); padMove(e); driveTick();
+});
+pad.addEventListener('pointermove', e => { if (e.pointerId === drive.pointer) padMove(e); });
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev =>
+  pad.addEventListener(ev, e => { if (e.pointerId === drive.pointer) stopDriving(); }));
+
+function driveKey(e, down) {
+  if (e.key === ' ' && down) { e.preventDefault(); stopDriving(); return true; }
+  const dir = KEYMAP[e.key.toLowerCase()];
+  if (!dir) return false;
+  e.preventDefault();
+  if (down) { if (connected) drive.keys.add(dir); } else drive.keys.delete(dir);
+  if (down) driveTick();
+  return true;
+}
+// Losing focus would swallow the keyup, so treat it as letting go.
+window.addEventListener('blur', stopDriving);
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopDriving(); });
+
+function onNear(m) { setPill('pSonar', m.data ? 'obstacle ahead' : 'sonar clear', m.data ? 'warn' : 'ok'); }
 
 // ------------------------------------------------------------ saved spots (this browser only)
 const KEY = 'robot_web_nav.spots';
