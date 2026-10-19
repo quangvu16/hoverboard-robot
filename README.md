@@ -5,7 +5,8 @@ Hoverboard + LiDAR + ESP32 + ROS 2 Humble = an autonomous mobile robot.
 The motors, mainboard and battery come from a scrapped self-balancing hoverboard.
 An ESP32 reads the LiDAR, IMU and sonars, drives the mainboard, and streams everything
 over Wi-Fi to a ROS 2 Humble PC. The PC runs SLAM (Cartographer or slam_toolbox), Nav2,
-an EKF and RViz. You can also drive the robot from a web page or an Android app.
+an EKF and RViz. You can also drive the robot from a web page or an Android app, and it
+docks itself to charge when the battery runs low.
 
 This repository is the PC-side colcon workspace (`~/robot_ws`). A full illustrated guide
 is in [`website/index.html`](website/index.html): open it in a browser.
@@ -329,9 +330,9 @@ All three do the same things:
 |---|---|
 | **Drive stick** and `W` `A` `S` `D`: 10 commands a second while held, zeros on release; grabbing it cancels a Nav2 goal; leaving the page or app stops | `/cmd_vel_manual` (beats Nav2 in `twist_mux`) |
 | **Hold still / Release**: holds the robot against Nav2 and every stick, and greys the stick. The label shows the lock set by any client | `/cmd_vel_lock` (needs `ros-humble-twist-mux`) |
-| **Battery**: voltage; orange or red when the ESP32 is limiting speed (low) or holding the wheels (critical) | `/hoverboard/battery_state`, `/hoverboard/battery_volts` |
+| **Battery**: voltage and rough %; orange or red when the ESP32 is limiting speed (low) or holding the wheels (critical) | `/hoverboard/battery_state`, `/hoverboard/battery_volts`, `/battery_state` |
 | **Sonar distances**: front, left and right in metres; `clear` = nothing within 2 m | `/range/{front,left,right}` |
-| **Dock** (web page): Set dock here, Dock, Undock, Cancel, auto-dock on low battery; the dock is drawn on the map | `/dock/command`, `/dock/status` (robot_docking) |
+| **Dock**: web page and app have Set dock here (asks first), Dock, Undock, Cancel, auto-dock on low battery, and the dock drawn on the map; the project page panel has Dock / Undock (Cancel while busy) | `/dock/command`, `/dock/status` (robot_docking) |
 | **Navigation** (web page and app): click or tap a spot to go there, drag for the heading, set pose, cancel, saved spots | `/web/goal`, `/web/cancel`, `/initialpose`, `/web/nav_status` |
 
 Without the PC, the ESP32's own [drive page](#drive-from-a-phone-no-pc-needed) at
@@ -339,22 +340,56 @@ Without the PC, the ESP32's own [drive page](#drive-from-a-phone-no-pc-needed) a
 
 ## Docking
 
-`robot_docking` parks the robot in its dock and does it by itself when the battery runs low.
-`web_nav.launch.py` starts it (`docking:=true`, `auto_dock:=true`).
+`robot_docking` parks the robot in its dock, and does it by itself when the battery runs low.
+`web_nav.launch.py` starts it (`docking:=true`, `auto_dock:=true`). It needs Nav2 running and
+the robot localized on a map.
 
-1. Park the robot in the dock, localized on the map, and press **Set dock here**. The pose is
-   saved in `~/.ros/robot_dock.json`.
-2. **Dock**: Nav2 drives to a staging pose 0.7 m in front of the dock, facing away. Then the
-   dock manager reverses the robot in, steering on the TF pose, and stops 1 cm short.
-   Backwards keeps the front sonar reflex and the collision monitor pointed away from the dock.
-3. **Undock** drives forwards 0.7 m. **Auto-dock**: when the ESP32 reports battery `low`, the
-   robot docks, replacing any Nav2 goal.
+```
+            dock (saved robot pose)          staging pose
+   wall ▐ [robot] ──────── 0.7 m ──────────► ●
+          ◄── 2. reverse in (dock_manager)   1. Nav2 drives here, facing away
+```
 
-From a shell: `ros2 topic pub -1 /dock/command std_msgs/String "data: dock"` (also `save`,
-`undock`, `cancel`, `auto on`, `auto off`); status is on `/dock/status`. In simulation it docked
-within 1 cm along the dock axis, 0–1 cm off it and 1–4°. With no camera it's only as precise as
-the localization. Charging needs contacts on the dock wired to the charge port. See
-[`src/robot_docking/README.md`](src/robot_docking/README.md).
+1. **Set the dock once.** Park the robot in the dock, localized on the map, and press
+   **Set dock here**. The pose is saved in `~/.ros/robot_dock.json` and survives restarts.
+2. **Dock.**
+   1. Nav2 drives forwards to a staging pose 0.7 m in front of the dock, facing away.
+   2. The dock manager reverses the robot in, steering on the TF pose, and stops 1 cm short.
+   3. If that takes over 40 s, it returns to the staging pose and tries once more.
+3. **Undock** drives forwards 0.7 m, back to the staging pose.
+4. **Auto-dock.** When the ESP32 reports battery `low` (below 35.5 V, speed already halved),
+   the robot docks by itself and replaces any Nav2 goal. It doesn't wait for `critical`, because
+   the ESP32 holds the wheels at zero then.
+
+| Where | Controls |
+|---|---|
+| Web page `http://<pc>:8000`, Dock section | Set dock here, Dock, Undock, Cancel, auto-dock checkbox; the dock is drawn on the map |
+| Android app, Dock section | the same |
+| Project page panel ([`website/index.html`](website/index.html), chapter 09) | Dock / Undock (Cancel while busy) |
+| Shell | `ros2 topic pub -1 /dock/command std_msgs/String "data: dock"` (also `save`, `undock`, `cancel`, `auto on`, `auto off`); `ros2 topic echo /dock/status` |
+
+- **Why backwards.** The front sonar reverses the robot away from anything nearer than 350 mm,
+  and the collision monitor only watches the front. Backing in keeps both pointed away from the
+  dock.
+- **Same safety chain.** The docking moves go through the same chain as Nav2's
+  (`/cmd_vel` → collision monitor → `twist_mux`), so a stick or `/cmd_vel_lock` still overrides
+  them.
+- **Simulation results.** Requested and battery-low docking ended within 1–3 cm along the dock
+  axis, 0–1 cm off it, and 1–4°.
+- **Limits:**
+  - With no camera, the final position is only as precise as the localization.
+  - The mainboard measures motor current, not battery current, so charging isn't detected.
+  - Charging needs contacts on the dock wired to the hoverboard's charge port.
+- **Not Nav2's docking server.** Nav2's own server (`ros-humble-opennav-docking` 0.0.2) got
+  backwards docking wrong in the same simulation, so a short reverse controller does the last
+  0.7 m. It's worth revisiting with an AprilTag dock detector.
+- **Troubleshooting:**
+  - *Nav2 is not running* / *could not reach the staging pose*: start web_nav with a stack
+    (`stack:=cartographer` or `amcl`) and set the pose first.
+  - Docks beside or short of the charger: re-localize, or press Set dock here again with the
+    robot in the dock.
+
+Details: [`src/robot_docking/README.md`](src/robot_docking/README.md).
 
 The bridge also publishes a standard `sensor_msgs/BatteryState` on `/battery_state`, at 1 Hz:
 
