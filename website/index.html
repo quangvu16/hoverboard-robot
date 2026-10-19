@@ -379,6 +379,7 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
 .rv { opacity: 0; transform: translateY(28px); transition: opacity .8s ease, transform .8s cubic-bezier(.2, .8, .2, 1); }
 .rv.in { opacity: 1; transform: none; }
 
+kbd { font: .75em var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 .35em; background: var(--bg); }
 /* live drive panel (chapter 09): raw rosbridge JSON over a WebSocket */
 .drive { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 400px); gap: 28px 56px; align-items: start; margin-top: clamp(28px, 4vw, 48px); }
 @media (max-width: 860px) { .drive { grid-template-columns: minmax(0, 1fr); } }
@@ -452,13 +453,13 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
       </ol>
     </nav>
   </div>
-  <div class="wrap foot">ROS 2 Humble · ESP32 · Wi-Fi · last updated 11.10.26</div>
+  <div class="wrap foot">ROS 2 Humble · ESP32 · Wi-Fi · last updated 19.10.26</div>
 </div>
 
 <main id="top">
   <div class="wrap">
     <section class="hero">
-      <div class="kicker"><b></b>Field manual · ROS 2 Humble · ESP32 · updated 11.10.26</div>
+      <div class="kicker"><b></b>Field manual · ROS 2 Humble · ESP32 · updated 19.10.26</div>
       <h1 aria-label="Hoverboard robot">Hoverboard <em>robot</em></h1>
       <div class="hero-row">
         <p class="lede"><strong>A hoverboard that maps the room and drives itself there.</strong> The motors, mainboard and battery come from a scrapped self-balancing hoverboard. An ESP32 reads the LiDAR, IMU and sonars, drives the mainboard, and sends everything over Wi-Fi to a ROS 2 Humble PC. That PC runs SLAM, Nav2 and RViz.</p>
@@ -826,7 +827,7 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
     <section class="chapter" id="firmware">
       <div class="chapter-head">
         <div class="eyebrow"><span class="num">(03)</span><span>Firmware</span></div>
-        <h2>Two firmwares and three wire formats</h2>
+        <h2>Two firmwares, three wire formats, and a robot you can drive from a phone</h2>
       </div>
       <div class="grid2">
         <div class="panel">
@@ -843,7 +844,7 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
           <thead><tr><th>Datagram</th><th>Port</th><th>Direction</th><th>Contents</th></tr></thead>
           <tbody>
             <tr><td><code>LDS1</code></td><td class="num">UDP 9900</td><td>ESP32 → PC</td><td>magic, <code>u16</code> count, <code>u32</code> scan id, then count × <code>u16</code> ranges in mm, little-endian</td></tr>
-            <tr><td><code>HBT1</code></td><td class="num">UDP 9902</td><td>ESP32 → PC</td><td>Accumulated ticks (so a lost datagram costs nothing), RPM, battery, sonars, lights. Bytes 52–73 carry the IMU: 74 bytes in total.</td></tr>
+            <tr><td><code>HBT1</code></td><td class="num">UDP 9902</td><td>ESP32 → PC</td><td>Accumulated ticks (so a lost datagram costs nothing), RPM, battery, sonars, lights. Bytes 52–73 carry the IMU, 74–77 the low-battery state: 78 bytes in total. The bridge still accepts older, shorter packets.</td></tr>
             <tr><td><code>HBC1</code></td><td class="num">UDP 9901</td><td>PC → ESP32</td><td>Wheel RPM targets; flag bit1 drives the buzzer</td></tr>
           </tbody>
         </table>
@@ -851,6 +852,61 @@ footer.site .legal { display: flex; flex-wrap: wrap; justify-content: space-betw
       <div class="note info">
         <b class="t">IMU note</b>
         <p>The MPU9250 runs gyro and accelerometer fusion on the ESP32, with no compass, because the hub-motor magnets corrupt it. It reports in the BNO055's units, so the bridge works with either chip. The bridge holds back <code>/imu/data</code> until calibration reports <code>gyro 3</code>. Keep the robot still for about 2 s after power-on so it can learn the gyro bias.</p>
+      </div>
+    
+      <div class="grid2">
+        <div class="panel">
+          <h3>Drive from a phone, no PC</h3>
+          <p>The ESP32 serves its own drive page. Open <code>http://hoverboard.local/</code> (or the board's IP) on a phone on the same Wi-Fi and drive with the stick, two RPM sliders or <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd>. It also shows battery, wheel RPM, the three sonars and who has the wheels.</p>
+          <ul>
+            <li>A small HTTP + WebSocket server written with the ESP32 core only (<code>web_drive.h</code>), so still no third-party libraries.</li>
+            <li>Commands go the same way as ROS's, so the sonar reflex and timeouts still apply. Each wheel is capped at 60 rpm.</li>
+            <li>While you hold the stick it overrides ROS. 0.5 s after you let go the wheels stop and ROS gets them back.</li>
+            <li>Closing the page, switching apps or losing Wi-Fi stops the robot.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>Low-battery protection</h3>
+          <p>The ESP32 watches the voltage the mainboard reports (filtered over 5 s, confirmed for 10 s), so the robot stops on purpose before the pack is ruined or the mainboard cuts out at 3.37 V/cell.</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>State</th><th>Below</th><th>The ESP32</th></tr></thead>
+              <tbody>
+                <tr><td>low</td><td class="num">35.5 V</td><td>halves every wheel command, beeps every 30 s</td></tr>
+                <tr><td>critical</td><td class="num">34.5 V</td><td>holds the wheels at zero, beeps twice every 5 s</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Back to normal only above 37.0 V, in practice after charging. ROS sees it on <code>/hoverboard/battery_state</code>.</p>
+        </div>
+        <div class="panel">
+          <h3>Firmware updates over Wi-Fi</h3>
+          <p>After one USB flash with a password in <code>secrets.h</code>, every update is one command:</p>
+          <div class="cmd"><div class="label">shell<button class="copy" type="button">Copy</button></div><pre>tools/ota_upload.sh                       <span class="c"># build + upload to hoverboard.local</span>
+tools/ota_upload.sh firmware/ldrobot_ld14p_esp32s3_mpu9250_ros 192.168.1.50</pre></div>
+          <ul>
+            <li>No password, no OTA: nobody else on the Wi-Fi can reflash the robot.</li>
+            <li>The board only answers while the robot stands still, and holds the wheels at zero until it reboots.</li>
+            <li>A bad image can't brick it: the old firmware stays in the other slot.</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <h3>ESP32-S3 port</h3>
+          <p>A second sketch, <code>ldrobot_ld14p_esp32s3_mpu9250_ros</code>, runs the same firmware on an ESP32-S3-DevKitC-1 v1.1 (N16R8). The S3 has no GPIO 22–25, and its flash and PSRAM take 26–37, so some wires move:</p>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Signal</th><th>ESP32</th><th>S3</th></tr></thead>
+              <tbody>
+                <tr><td>Mainboard RX / TX</td><td class="num">26 / 27</td><td class="num">6 / 7</td></tr>
+                <tr><td>MPU9250 SDA / SCL</td><td class="num">21 / 22</td><td class="num">8 / 9</td></tr>
+                <tr><td>Front sonar TRIG / ECHO</td><td class="num">32 / 33</td><td class="num">1 / 2</td></tr>
+                <tr><td>Side sonar ECHOs</td><td class="num">19 / 23</td><td class="num">10 / 11</td></tr>
+                <tr><td>Buzzer</td><td class="num">25</td><td class="num">21</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p>Full side-by-side pinout with header drawings: <a href="https://github.com/quangvu16/hoverboard-robot/blob/main/firmware/PINOUT.md">firmware/PINOUT.md</a>.</p>
+        </div>
       </div>
     </section>
 
@@ -1137,9 +1193,40 @@ ros2 launch robot_navigation navigation2.launch.py \
       </div>
       <div class="stack">
         <h3>Driving by hand</h3>
-        <div class="cmd"><div class="label">shell<button class="copy" type="button">Copy</button></div><pre>ros2 run rqt_robot_steering rqt_robot_steering        <span class="c"># publishes /cmd_vel_manual</span>
-ros2 run teleop_twist_keyboard teleop_twist_keyboard  <span class="c"># publishes /cmd_vel</span>
+        <div class="cmd"><div class="label">shell<button class="copy" type="button">Copy</button></div><pre>ros2 run rqt_robot_steering rqt_robot_steering        <span class="c"># publishes /cmd_vel_manual (beats Nav2)</span>
+ros2 run teleop_twist_keyboard teleop_twist_keyboard  <span class="c"># publishes /cmd_vel (through the collision monitor)</span>
 ros2 launch hoverboard_ctrl joy_launch.py             <span class="c"># gamepad</span></pre></div>
+      </div>
+    
+      <div class="stack">
+        <h3>The safety chain between Nav2 and the wheels</h3>
+        <p>Bringup puts two arbiters in front of the bridge, and the sonars now reach Nav2 too:</p>
+        <div class="cmd"><div class="label">velocity commands</div><pre>Nav2 ──/cmd_vel──► collision_monitor ──/cmd_vel_safe──► twist_mux ──/cmd_vel_mux──► bridge ──► ESP32
+                                                         ▲     ▲
+sticks, web, app, rqt ──/cmd_vel_manual ─────────────────┘     │
+/cmd_vel_lock (true = hold still) ─────────────────────────────┘</pre></div>
+        <div class="grid3">
+          <div class="panel">
+            <h3>Sonars in Nav2</h3>
+            <p>The three HC-SR04s go out as <code>sensor_msgs/Range</code> on <code>/range/{front,left,right}</code>. A range layer in the local costmap marks glass, chair legs and low objects the LiDAR misses, reliably from about 0.5 m.</p>
+          </div>
+          <div class="panel">
+            <h3>Collision monitor</h3>
+            <p>Uses the LiDAR and the sonars. Anything up to 0.60 m ahead slows Nav2 to 40 %; anything at 0.32 m stops it. Manual driving bypasses it, and the ESP32 reflex still covers that.</p>
+          </div>
+          <div class="panel">
+            <h3>Command priorities</h3>
+            <p><code>twist_mux</code>: grab any stick and it overrides Nav2 at once; Nav2 gets the wheels back 0.5 s after you let go. <code>/cmd_vel_lock</code> holds the robot still, sticks included.</p>
+          </div>
+        </div>
+        <div class="cmd"><div class="label">shell<button class="copy" type="button">Copy</button></div><pre>sudo apt install ros-humble-twist-mux                    <span class="c"># once; without it bringup falls back to "last message wins"</span>
+ros2 topic pub -1 /cmd_vel_lock std_msgs/Bool "data: true"   <span class="c"># hold still</span>
+ros2 topic pub -1 /cmd_vel_lock std_msgs/Bool "data: false"  <span class="c"># release</span>
+ros2 launch robot_bringup robot_bringup.launch.py collision_monitor:=false cmd_mux:=false   <span class="c"># old behaviour</span></pre></div>
+      </div>
+      <div class="note warn">
+        <b class="t">Update tf2 on the robot PC</b>
+        <p>Testing found a deadlock in <code>ros-humble-tf2-ros</code> 0.25.23 between Nav2's message filter and the TF listener: the local costmap then silently stops taking sensor data, LiDAR included, while Nav2 keeps driving. Run <code>sudo apt upgrade</code> (0.25.24 makes it much rarer). It's also why the sonars go into Nav2 as Range messages, which don't use that filter, and not as extra laser scans, which triggered it within minutes.</p>
       </div>
     </section>
 
@@ -1468,6 +1555,10 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
             <tr><td>Robot heads the wrong way under Nav2</td><td>The scan isn't turning with the robot (LiDAR not fixed to the chassis), or the scan is mirrored</td><td>Run <code>lidar_mirror_test.py</code> with the robot on the floor</td></tr>
             <tr><td><code>/imu/data</code> missing; calib status shows <code>none</code></td><td>The firmware can't find the chip, usually a loose I²C or VCC wire</td><td>Reseat SDA 21 / SCL 22 / 3V3 / GND and reboot</td></tr>
             <tr><td>No motion from <code>/cmd_vel</code></td><td>Best-effort QoS, a sonar block, or two bridges running</td><td>Check <code>/ultrasonic/obstacle_near</code> and run <code>ps aux | grep ros2</code></td></tr>
+            <tr><td>Obstacles in RViz's local costmap stop updating; Nav2 drives as if nothing changed</td><td>tf2_ros 0.25.23 message-filter deadlock: the costmap no longer takes sensor data</td><td><code>sudo apt upgrade</code>, then restart Nav2</td></tr>
+            <tr><td>Robot won't move at all, even by hand</td><td><code>/cmd_vel_lock</code> left at <code>true</code>, or the ESP32 says <code>battery critical</code></td><td>Publish <code>data: false</code> on <code>/cmd_vel_lock</code>; check <code>/hoverboard/battery_state</code> and charge</td></tr>
+            <tr><td>Nav2 creeps or stops near walls</td><td>The collision monitor's slow (0.60 m) or stop (0.32 m) zone sees something</td><td>Watch <code>/polygon_slowdown</code>, <code>/polygon_stop</code> in RViz; tune <code>collision_monitor_hoverboard.yaml</code></td></tr>
+            <tr><td><code>ota_upload.sh</code>: <em>No response from the ESP</em></td><td>The robot is moving, OTA has no password, or ufw blocks TCP 38232</td><td>Stop the robot; add <code>OTA_PASSWORD</code> and flash once over USB; <code>sudo ufw allow 38232/tcp</code></td></tr>
             <tr><td>Edited YAML has no effect</td><td>Config is read from the install space</td><td>Rebuild that package and re-source</td></tr>
             <tr><td>Phantom obstacle at 0.23 m</td><td>The robot's own body</td><td>Costmaps and Cartographer already ignore returns under 0.30 m</td></tr>
           </tbody>
@@ -1488,6 +1579,9 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
         <div class="row"><span class="pill todo">To do</span><p>The IMU dropped out in the last session (calib status <code>none</code>), so check its wiring. Confirm the scan turns with the robot before tuning Nav2.</p></div>
         <div class="row"><span class="pill info">New</span><p>Web navigation (<code>robot_web_nav</code>) is built and its helper node is tested. It still needs <code>ros-humble-rosbridge-suite</code> installed and a live run on the robot.</p></div>
         <div class="row"><span class="pill info">New</span><p>The Robot Nav Android app (<code>~/RobotNav.apk</code>) is built. It still needs a run on a phone against a live rosbridge.</p></div>
+        <div class="row"><span class="pill info">New</span><p>Safety chain (sonars in Nav2, collision monitor, <code>twist_mux</code>) tested with a fake ESP32 and LiDAR: slow, stop, manual-over-Nav2, lock, and a 4-minute costmap soak all passed. <code>twist_mux</code> still needs installing.</p></div>
+        <div class="row"><span class="pill info">New</span><p>ESP32 drive page, low-battery protection and Wi-Fi updates compile for the ESP32 and the S3 and pass tests on the PC. They still need flashing to the board (<code>~/Arduino</code> has the older sketch).</p></div>
+        <div class="row"><span class="pill todo">To do</span><p><code>sudo apt upgrade</code> on the robot PC for tf2_ros 0.25.24 (costmap deadlock, see Map &amp; navigate).</p></div>
         <div class="row"><span class="pill info">Reverted</span><p>A 180° front/back swap (<code>reverse_direction</code>) was tried and reverted on 11 Oct 2026. Re-record any map made while it was active.</p></div>
       </div>
 
@@ -1498,6 +1592,8 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
           <div><time datetime="2026-10-04">04.10.26</time><p>Hoverboard base becomes the bringup default (HBT1/HBC1 over UDP 9902/9901).</p></div>
           <div><time datetime="2026-10-07">07.10.26</time><p>IMU support added to firmware and bridge (HBT1 grows to 74 bytes); dead ST7789 display removed.</p></div>
           <div><time datetime="2026-10-11">11.10.26</time><p>MPU9250 firmware in use; EKF on by default; LiDAR+IMU-only Cartographer mode; direction swap tried and reverted; systemd autostart, web navigation and the Android app added.</p></div>
+          <div><time datetime="2026-10-18">18.10.26</time><p>Drive sticks on the web page, the Android app and this site; ESP32-S3 port and pinout; the ESP32 serves its own drive page.</p></div>
+          <div><time datetime="2026-10-19">19.10.26</time><p>Low-battery protection and Wi-Fi updates in the firmware; sonars in Nav2, collision monitor and <code>twist_mux</code> command priorities; tf2 deadlock found and worked around.</p></div>
         </div>
       </div>
     </section>
