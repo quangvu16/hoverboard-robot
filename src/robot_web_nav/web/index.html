@@ -78,6 +78,9 @@ button.cancel:disabled { background: var(--sunk); color: var(--muted); cursor: d
 .slider input { width: 100%; accent-color: var(--accent); }
 .slider output { font: 0.82rem var(--mono); text-align: right; color: var(--fg); white-space: nowrap; }
 button.stop { background: var(--bad); color: #fff; margin-top: 10px; }
+.lockrow { align-items: center; margin-top: 8px; }
+.lockrow span { flex: 1; font-size: 0.85rem; color: var(--muted); }
+.lockrow span.on { color: var(--bad); font-weight: 600; }
 .drivehead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
 .drivehead h2 { margin: 0; }
 .keys { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
@@ -98,6 +101,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
     <span class="pill" id="pStack">stack ?</span>
     <span class="pill" id="pNav">Nav2 ?</span>
     <span class="pill" id="pMap">no map</span>
+    <span class="pill" id="pBatt">battery ?</span>
   </header>
 
   <div class="mapwrap">
@@ -128,10 +132,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       </div>
       <dl>
         <dt>Command</dt><dd id="dCmd">stopped</dd>
+        <dt>Sonar F · L · R</dt><dd id="dSonar">—</dd>
       </dl>
       <div class="slider" style="margin-top:8px"><label for="dV">Max speed</label><input type="range" id="dV" min="0.05" max="0.5" step="0.05" value="0.2"><output id="dVo"></output></div>
       <div class="slider"><label for="dW">Max turn</label><input type="range" id="dW" min="0.2" max="2" step="0.1" value="0.8"><output id="dWo"></output></div>
       <button class="big stop" id="btnStop">Stop</button>
+      <div class="row lockrow" title="twist_mux lock on /cmd_vel_lock: holds the robot still, Nav2 and every stick included">
+        <span id="dLock">lock: unknown</span>
+        <button id="btnHold">Hold still</button><button id="btnRelease">Release</button>
+      </div>
       <div class="keys">Keys: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to drive, <kbd>Space</kbd> to stop. Release = stop.</div>
     </section>
     <section>
@@ -204,14 +213,33 @@ const tInit = T('/initialpose', 'geometry_msgs/msg/PoseWithCovarianceStamped');
 // stops the wheels by itself 0.5 s after the last command (cmd_timeout_s).
 const tDrive = T('/cmd_vel_manual', 'geometry_msgs/msg/Twist');
 const tNear = T('/ultrasonic/obstacle_near', 'std_msgs/msg/Bool', { throttle_rate: 200, queue_length: 1 });
+// From the hoverboard bridge: the ESP32's battery state, the sonars as Range,
+// and the twist_mux lock (both ways).
+const tBattState = T('/hoverboard/battery_state', 'std_msgs/msg/String');
+const tBattVolts = T('/hoverboard/battery_volts', 'std_msgs/msg/Float32', { throttle_rate: 1000, queue_length: 1 });
+const SIDES = ['front', 'left', 'right'];
+const tRange = SIDES.map(s => T('/range/' + s, 'sensor_msgs/msg/Range', { throttle_rate: 200, queue_length: 1 }));
+const tLock = T('/cmd_vel_lock', 'std_msgs/msg/Bool');
 
 function subscribeAll() {
   tMap.subscribe(onMap); tPose.subscribe(onPose); tStatus.subscribe(onStatus); tPlan.subscribe(onPlan);
   tNear.subscribe(onNear); $('pad').classList.remove('off');
+  tBattState.subscribe(m => { batt.state = m.data; showBattery(); });
+  tBattVolts.subscribe(m => { batt.volts = m.data; showBattery(); });
+  tRange.forEach((t, i) => t.subscribe(m => {
+    // The bridge sends exactly max_range for "no echo".
+    sonar[i] = m.range == null || m.range >= m.max_range - 1e-3 ? Infinity : m.range; showSonar();
+  }));
+  tLock.subscribe(m => {
+    const was = lockSeen; lockSeen = !!m.data;
+    if (lockSeen && was !== true) stopDriving();   // just locked: let go of the stick
+    showLock();
+  });
 }
 function unsubscribeAll() {
-  [tMap, tPose, tStatus, tPlan, tNear].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
+  [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
   stopDriving(); $('pad').classList.add('off'); setPill('pSonar', 'sonar ?', '');
+  lockSeen = null; showLock();
 }
 
 // ------------------------------------------------------------ state
@@ -516,7 +544,7 @@ function padMove(e) {
   drive.x = x; drive.y = y;
 }
 pad.addEventListener('pointerdown', e => {
-  if (!connected) return;
+  if (!connected || lockSeen === true) return;
   e.preventDefault();
   try { pad.setPointerCapture(e.pointerId); } catch (err) {}   // keeps the drag when the finger leaves the pad
   drive.pointer = e.pointerId; pad.classList.add('on'); padMove(e); driveTick();
@@ -530,7 +558,7 @@ function driveKey(e, down) {
   const dir = KEYMAP[e.key.toLowerCase()];
   if (!dir) return false;
   e.preventDefault();
-  if (down) { if (connected) drive.keys.add(dir); } else drive.keys.delete(dir);
+  if (down) { if (connected && lockSeen !== true) drive.keys.add(dir); } else drive.keys.delete(dir);
   if (down) driveTick();
   return true;
 }
@@ -539,6 +567,40 @@ window.addEventListener('blur', stopDriving);
 document.addEventListener('visibilitychange', () => { if (document.hidden) stopDriving(); });
 
 function onNear(m) { setPill('pSonar', m.data ? 'obstacle ahead' : 'sonar clear', m.data ? 'warn' : 'ok'); }
+
+// ------------------------------------------------------------ battery, sonars, lock
+const batt = { state: '', volts: NaN };
+function showBattery() {
+  const v = isFinite(batt.volts) ? ` ${batt.volts.toFixed(1)} V` : '';
+  const L = { ok: ['battery' + v, 'ok'], low: ['battery low' + v, 'warn'], critical: ['battery critical' + v, 'bad'] }[batt.state]
+    || [v ? 'battery' + v : 'battery ?', ''];
+  setPill('pBatt', L[0], L[1]);
+}
+const sonar = [NaN, NaN, NaN];   // metres; Infinity = no echo
+function showSonar() {
+  $('dSonar').textContent = sonar.map(m => isNaN(m) ? '—' : (m === Infinity ? 'clear' : m.toFixed(2))).join(' · ');
+}
+// lockSeen = what /cmd_vel_lock last carried (from any client, this page
+// included); null = nothing seen since connecting. While holding, re-send
+// true every 2 s so other clients see it; release is sent three times.
+let lockSeen = null, holding = false;
+function publishLock(on) { if (connected) tLock.publish(new ROSLIB.Message({ data: on })); }
+function showLock() {
+  const el = $('dLock');
+  el.textContent = lockSeen === true ? 'lock: ON, robot held still' : lockSeen === false ? 'lock: off' : 'lock: unknown (needs twist_mux)';
+  el.classList.toggle('on', lockSeen === true);
+  pad.classList.toggle('off', !connected || lockSeen === true);
+}
+$('btnHold').onclick = () => {
+  if (!connected) { flash('Not connected.'); return; }
+  holding = true; stopDriving(); publishLock(true);
+};
+$('btnRelease').onclick = () => {
+  if (!connected) { flash('Not connected.'); return; }
+  holding = false; publishLock(false);
+  [300, 600].forEach(ms => setTimeout(() => { if (!holding) publishLock(false); }, ms));
+};
+setInterval(() => { if (holding) publishLock(true); }, 2000);
 
 // ------------------------------------------------------------ saved spots (this browser only)
 const KEY = 'robot_web_nav.spots';

@@ -57,6 +57,15 @@ on). The amcl launch always opens RViz.
     dropped Wi-Fi link stops the robot
   - switching tabs or windows stops the robot at once
   - the ESP32's sonar reflex still overrides you; the `obstacle ahead` pill shows it
+- **Hold still** / **Release** (under Stop): the `twist_mux` lock on `/cmd_vel_lock`. It holds
+  the robot still against Nav2 and every stick, and greys the stick. The page re-sends it
+  every 2 s while holding, and the label shows what the topic last carried, from any client.
+  It needs `ros-humble-twist-mux` on the robot PC (robot_bringup `cmd_mux`).
+- **Battery** pill (top): the ESP32's voltage and state from `/hoverboard/battery_state` and
+  `/hoverboard/battery_volts`. It turns orange at low (the ESP32 halves the speed) and red at
+  critical (the wheels are held until the pack is charged).
+- **Sonar F · L · R**: distances in metres from `/range/{front,left,right}`. `clear` = no echo
+  within 2 m.
 - **Goal**: click where the robot should go. Drag to set the final heading. A plain
   click makes the robot face the way it drove. A new goal replaces the active one.
 - **Set pose**: click where the robot really is, and drag the way it faces. This publishes
@@ -83,6 +92,10 @@ To drive, send this JSON over `ws://<robot-pc-ip>:9090` every 100 ms, and send z
 | `/web/goal` | geometry_msgs/PoseStamped | in | frame `map` |
 | `/web/cancel` | std_msgs/Empty | in | |
 | `/initialpose` | geometry_msgs/PoseWithCovarianceStamped | in | |
+| `/cmd_vel_lock` | std_msgs/Bool | in/out | twist_mux lock: true = hold still |
+| `/hoverboard/battery_state` | std_msgs/String | out | `ok` / `low` / `critical` / `unknown`, latched |
+| `/hoverboard/battery_volts` | std_msgs/Float32 | out | |
+| `/range/{front,left,right}` | sensor_msgs/Range | out | HC-SR04s; `max_range` (2 m) = no echo |
 | `/cmd_vel_manual` | geometry_msgs/Twist | in | manual driving: `linear.x` m/s, `angular.z` rad/s. Resend at least every 0.5 s |
 | `/ultrasonic/obstacle_near` | std_msgs/Bool | out | front sonar is blocking |
 | `/web/robot_pose` | geometry_msgs/PoseStamped | out | 5 Hz |
