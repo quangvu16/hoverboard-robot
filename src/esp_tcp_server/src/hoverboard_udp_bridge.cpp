@@ -79,6 +79,7 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
+#include <sensor_msgs/msg/range.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -94,6 +95,8 @@
 #include <errno.h>
 
 #include <cmath>
+#include <map>
+#include <limits>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -203,6 +206,31 @@ public:
     // still ~2 s (imu_status gyro 3). Before that the rate is off by the raw
     // bias, which the EKF would integrate into a slow spin - so hold /imu/data.
     imu_wait_gyro_cal_ = declare_parameter<bool>("imu_wait_gyro_cal", true);
+    // The HC-SR04s as sensor_msgs/Range on range/{front,left,right}, for the
+    // Nav2 RangeSensorLayer (local costmap) and the collision monitor. No echo
+    // (and echoes past range_max) go out as exactly range_max: the costmap
+    // layer clears the cone on that, and the collision monitor's points then
+    // lie range_max away, outside every zone. A stale (dead) sensor publishes
+    // nothing.
+    //
+    // Not as LaserScans into an ObstacleLayer, though that marks near echoes
+    // better: ObstacleLayer goes through tf2_ros::MessageFilter, which on this
+    // Humble install (tf2_ros 0.25.23, also 0.25.24) deadlocks against the TF
+    // listener - the costmap then silently stops taking ANY sensor data, LiDAR
+    // included. Three extra 50 Hz scans made that happen within minutes in
+    // testing; RangeSensorLayer does not use the MessageFilter.
+    range_fov_ = declare_parameter<double>("range_field_of_view", 0.35);   // rad, HC-SR04 ~20 deg
+    range_min_ = declare_parameter<double>("range_min_m", 0.02);
+    range_max_ = declare_parameter<double>("range_max_m", 2.0);            // trusted range
+    // Stamped this far in the past and sent at most range_rate_hz per sensor.
+    // A ping is 60-120 ms old by the time it arrives anyway; stamped "now", each
+    // Range had to wait for the next odom TF in the costmap's canTransform, and
+    // at 3 x 50 Hz the costmap fell further behind every second (tested).
+    range_stamp_lag_ = declare_parameter<double>("range_stamp_lag_s", 0.05);
+    range_period_ = 1.0 / std::max(1.0, declare_parameter<double>("range_rate_hz", 10.0));
+    // false when twist_mux arbitrates (robot_bringup cmd_mux): then manual
+    // driving reaches the wheels only through the mux, never around it.
+    subscribe_manual_ = declare_parameter<bool>("subscribe_cmd_vel_manual", true);
 
     if (encoder_tpr_ <= 0.0 || wheel_radius_ <= 0.0 || wheel_separation_ <= 0.0)
       throw std::runtime_error("encoder_tpr, wheel_radius_m and wheel_separation_m must be > 0");
@@ -230,6 +258,10 @@ public:
     pub_sonar_l_near_ = create_publisher<std_msgs::msg::Bool>("ultrasonic/left/obstacle_near", 10);
     pub_sonar_r_dist_ = create_publisher<std_msgs::msg::Int32>("ultrasonic/right/distance_mm", 10);
     pub_sonar_r_near_ = create_publisher<std_msgs::msg::Bool>("ultrasonic/right/obstacle_near", 10);
+    // Sensor-data QoS, which is what the range layer and collision monitor use.
+    pub_range_f_ = create_publisher<sensor_msgs::msg::Range>("range/front", rclcpp::SensorDataQoS());
+    pub_range_l_ = create_publisher<sensor_msgs::msg::Range>("range/left", rclcpp::SensorDataQoS());
+    pub_range_r_ = create_publisher<sensor_msgs::msg::Range>("range/right", rclcpp::SensorDataQoS());
     // The ESP32's indicator and stop LEDs as they are lit right now - the
     // indicators toggle with their blink, every 300 ms (LIGHT_BLINK_MS).
     pub_light_left_  = create_publisher<std_msgs::msg::Bool>("lights/left", 10);
@@ -250,9 +282,13 @@ public:
     sub_cmd_vel_ = create_subscription<geometry_msgs::msg::Twist>(
       "cmd_vel", cmd_qos,
       std::bind(&HoverboardUdpBridge::on_cmd_vel, this, std::placeholders::_1));
-    sub_cmd_vel_manual_ = create_subscription<geometry_msgs::msg::Twist>(
-      "cmd_vel_manual", cmd_qos,
-      std::bind(&HoverboardUdpBridge::on_cmd_vel, this, std::placeholders::_1));
+    if (subscribe_manual_) {
+      sub_cmd_vel_manual_ = create_subscription<geometry_msgs::msg::Twist>(
+        "cmd_vel_manual", cmd_qos,
+        std::bind(&HoverboardUdpBridge::on_cmd_vel, this, std::placeholders::_1));
+    } else {
+      RCLCPP_INFO(get_logger(), "cmd_vel_manual not subscribed: commands arrive through the mux");
+    }
     // Same topic and type the Yahboom-derived nodes use (hoverboard_ctrl,
     // hoverboard_laser). Carried in every HBC1 frame; the ESP32 silences it by
     // itself if the frames stop.
@@ -463,6 +499,26 @@ private:
     near.data = (flags & HBT_FLAG_SONAR_NEAR) != 0;
     pub_sonar_near_->publish(near);
     pub_sonar_c_near_->publish(near);
+
+    if (!(flags & HBT_FLAG_SONAR_STALE)) publish_range(*pub_range_f_, "sonar_link", rd_u16(b + 42));
+  }
+
+  // One HC-SR04 reading as sensor_msgs/Range (see range_max_m above).
+  void publish_range(rclcpp::Publisher<sensor_msgs::msg::Range>& pub, const char* frame, uint16_t mm) {
+    const rclcpp::Time t = now();
+    auto& last = range_last_[&pub];
+    if (last.nanoseconds() != 0 && (t - last).seconds() < range_period_) return;
+    last = t;
+    sensor_msgs::msg::Range r;
+    r.header.stamp = t - rclcpp::Duration::from_seconds(range_stamp_lag_);
+    r.header.frame_id = frame;
+    r.radiation_type = sensor_msgs::msg::Range::ULTRASOUND;
+    r.field_of_view = (float)range_fov_;
+    r.min_range = (float)range_min_;
+    r.max_range = (float)range_max_;
+    const double m = mm / 1000.0;
+    r.range = (mm == 0 || m >= range_max_) ? (float)range_max_ : (float)std::max(m, range_min_);
+    pub.publish(r);
   }
 
   // Left and right HC-SR04s, same conventions as the front one.
@@ -487,6 +543,15 @@ private:
     pub_r_dist->publish(dist);
     near.data = (flags & HBT_FLAG_SONAR_R_NEAR) != 0;
     pub_r_near->publish(near);
+
+    // Topic and frame name the robot's side the sensor faces: with
+    // reverse_direction the physical left sensor faces the robot's right.
+    const char* l_frame = reverse_direction_ ? "sonar_right_link" : "sonar_left_link";
+    const char* r_frame = reverse_direction_ ? "sonar_left_link" : "sonar_right_link";
+    if (!(flags & HBT_FLAG_SONAR_L_STALE))
+      publish_range(reverse_direction_ ? *pub_range_r_ : *pub_range_l_, l_frame, rd_u16(b + 48));
+    if (!(flags & HBT_FLAG_SONAR_R_STALE))
+      publish_range(reverse_direction_ ? *pub_range_l_ : *pub_range_r_, r_frame, rd_u16(b + 50));
   }
 
   void handle_lights(const uint8_t* b) {
@@ -780,6 +845,10 @@ private:
   double imu_gyro_cov_{0.0004};
   double imu_accel_cov_{0.04};
   bool imu_wait_gyro_cal_{true};
+  double range_fov_{0.35}, range_min_{0.02}, range_max_{2.0};
+  double range_stamp_lag_{0.05}, range_period_{0.1};
+  std::map<const void*, rclcpp::Time> range_last_;   // per publisher, for range_rate_hz
+  bool subscribe_manual_{true};
   std::string last_imu_calib_;
 
   // Odometry state
@@ -821,6 +890,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_sonar_l_near_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_sonar_r_dist_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_sonar_r_near_;
+  rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr pub_range_f_, pub_range_l_, pub_range_r_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_light_left_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_light_right_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_light_back_;

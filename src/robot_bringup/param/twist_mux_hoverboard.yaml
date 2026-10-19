@@ -1,0 +1,30 @@
+# One arbiter for the hoverboard's velocity commands (robot_bringup cmd_mux).
+#
+#   Nav2 --/cmd_vel--> collision_monitor --/cmd_vel_safe--> twist_mux --/cmd_vel_mux--> bridge
+#   joystick, web stick, app, rqt_robot_steering --/cmd_vel_manual--^      ^
+#   ros2 topic pub /cmd_vel_lock std_msgs/Bool "data: true" ----------------'
+#
+# Highest priority with a live message wins; an input counts as silent after its
+# timeout. The bridge (and the ESP32 behind it) stop the wheels by themselves
+# when /cmd_vel_mux goes quiet.
+twist_mux:
+  ros__parameters:
+    topics:
+      navigation:
+        topic   : cmd_vel_safe     # remapped to cmd_vel when collision_monitor:=false
+        timeout : 0.5
+        priority: 10
+      manual:
+        # Grabbing a stick overrides Nav2 at once; Nav2 gets the wheels back
+        # 0.5 s after the last manual message. The web page and the app also
+        # cancel the active goal when you start driving.
+        topic   : cmd_vel_manual
+        timeout : 0.5
+        priority: 100
+    locks:
+      lock:
+        # true = hold the robot still: blocks every input, manual included.
+        # false (or never published) = normal.
+        topic   : cmd_vel_lock
+        timeout : 0.0
+        priority: 255

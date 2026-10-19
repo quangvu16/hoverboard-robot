@@ -267,6 +267,41 @@ ros2 run teleop_twist_keyboard teleop_twist_keyboard
 ros2 launch hoverboard_ctrl joy_launch.py
 ```
 
+### Safety chain for velocity commands
+
+Bringup puts two arbiters between every velocity command and the wheels:
+
+```
+Nav2 --/cmd_vel--> collision_monitor --/cmd_vel_safe--> twist_mux --/cmd_vel_mux--> bridge --> ESP32
+joystick, web stick, Android app, rqt --/cmd_vel_manual (beats Nav2)--^      ^
+ros2 topic pub /cmd_vel_lock std_msgs/Bool "data: true"  (beats everything) -'
+```
+
+- **Collision monitor** (`src/robot_bringup/param/collision_monitor_hoverboard.yaml`). It
+  slows Nav2 to 40 % when the LiDAR or a sonar sees something up to 0.60 m ahead of the
+  centre, and stops it at 0.32 m. Manual driving doesn't pass through it; the ESP32 reflex
+  still covers that. `collision_monitor:=false` turns it off.
+- **twist_mux** (`src/robot_bringup/param/twist_mux_hoverboard.yaml`).
+  - A stick on `/cmd_vel_manual` overrides Nav2 at once, and Nav2 gets the wheels back
+    0.5 s after the last manual message.
+  - `/cmd_vel_lock` `true` holds the robot still, joysticks included.
+  - It needs `sudo apt install ros-humble-twist-mux`. Without it, bringup says so and falls
+    back to the old "last message wins".
+- **Sonars in Nav2.** The bridge publishes the three HC-SR04s as `sensor_msgs/Range` on
+  `/range/{front,left,right}` (10 Hz). They feed:
+  - the collision monitor;
+  - a `RangeSensorLayer` in the local costmap, for glass, chair legs and low objects the
+    LiDAR misses. It marks reliably from about 0.5 m; nearer, the collision monitor and the
+    ESP32 reflex act on the raw ranges.
+- **Update tf2 on this PC** (`sudo apt upgrade` gets `ros-humble-tf2-ros` 0.25.24).
+  - Testing found a deadlock in tf2_ros 0.25.23, between Nav2's message filter and the TF
+    listener. When it hits, the local costmap silently stops taking sensor data, LiDAR
+    included.
+  - 0.25.24 made it much rarer but not impossible. At the LiDAR's own rate it didn't occur
+    in a 4-minute soak. Feeding the sonars as extra LaserScans triggered it within minutes,
+    which is why they go in as Range messages, which don't use that filter.
+  - The symptom: obstacles in RViz's local costmap stop updating while the robot moves.
+
 Run one stack at a time: two bringups fight over UDP 9902, and Cartographer and
 slam_toolbox must never run together. For LiDAR + IMU only mapping, pass
 `wheel_odom:=false` to **both** bringup and `cartographer_nav`.

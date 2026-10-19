@@ -10,6 +10,8 @@
 #   * progress checker sized for a slow robot
 #   * LiDAR returns closer than 0.30 m ignored: the chassis corner is 0.233 m
 #     from the centre, so anything nearer is the robot itself
+#   * range_layer in the local costmap: the three HC-SR04s (/range/*) for
+#     what the LiDAR cannot see (glass, low objects)
 #   * keepout_filter removed (no mask was ever published, only warnings)
 #   * duplicate voxel_layer removed from the global costmap (2D LiDAR)
 #   * odom_topic is /odom/filtered (wheel odometry + MPU9250 gyro, the
@@ -253,7 +255,7 @@ local_costmap:
       # Inscribed radius 0.165 m, circumscribed 0.233 m.
       footprint: "[[0.165, 0.165], [0.165, -0.165], [-0.165, -0.165], [-0.165, 0.165]]"
       footprint_padding: 0.01
-      plugins: ["obstacle_layer", "inflation_layer"]
+      plugins: ["obstacle_layer", "range_layer", "inflation_layer"]
 
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
@@ -280,6 +282,27 @@ local_costmap:
           raytrace_min_range: 0.30
           obstacle_max_range: 2.5
           obstacle_min_range: 0.30
+
+      # The three HC-SR04s (hoverboard_udp_bridge /range/*). They cover what
+      # the LiDAR misses: glass, chair legs, things below the scan plane. No
+      # echo is published as max_range (2 m), which clears the cone.
+      #   Humble limit: this layer's occupied band is +-(resolution x range),
+      #   so it marks reliably from ~0.5 m and only sometimes nearer (a near
+      #   echo must land on a cell centre). Nearer than that, the collision
+      #   monitor (robot_bringup) and the ESP32 reflex act on the raw ranges.
+      #   Not an ObstacleLayer fed with sonar scans: see the deadlock note in
+      #   hoverboard_udp_bridge.cpp.
+      range_layer:
+        plugin: "nav2_costmap_2d::RangeSensorLayer"
+        enabled: True
+        topics: ["/range/front", "/range/left", "/range/right"]
+        input_sensor_type: "VARIABLE"
+        clear_on_max_reading: True
+        clear_threshold: 0.2
+        mark_threshold: 0.8
+        phi: 1.2
+        inflate_cone: 1.0
+        no_readings_timeout: 0.0
 
       static_layer:
         map_subscribe_transient_local: True

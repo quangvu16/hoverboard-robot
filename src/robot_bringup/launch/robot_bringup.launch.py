@@ -31,6 +31,21 @@
 # slam_toolbox / AMCL follow the TF; Nav2 (robot_navigation/param/hoverboard.yaml)
 # and Cartographer read /odom/filtered, so keep ekf:=true when using them.
 #
+# Velocity commands (hoverboard only) pass a safety chain before the bridge:
+#
+#   Nav2 --/cmd_vel--> collision_monitor --/cmd_vel_safe--> twist_mux --/cmd_vel_mux--> bridge
+#   joystick / web stick / app / rqt --/cmd_vel_manual (beats Nav2)--^       ^
+#   /cmd_vel_lock (std_msgs/Bool, true = hold still, beats everything) ------'
+#
+# collision_monitor:=true (default) slows Nav2 down / stops it when the LiDAR or
+#   the sonars see something just ahead (param/collision_monitor_hoverboard.yaml).
+# cmd_mux:=auto (default) runs twist_mux (param/twist_mux_hoverboard.yaml) if
+#   ros-humble-twist-mux is installed, and otherwise falls back to the bridge
+#   listening to /cmd_vel(_safe) and /cmd_vel_manual itself, last message wins.
+#   true insists on twist_mux, false never runs it.
+# The sonars also reach Nav2's local costmap as /range/{front,left,right}
+# (robot_navigation/param/hoverboard.yaml, range_layer).
+#
 # wheel_odom:=false (hoverboard only) takes the encoders out of localization:
 # no EKF, and the bridge publishes no odom->base_footprint TF (its /odom topic
 # stays, unused; the wheels are still driven). Only for
@@ -67,14 +82,100 @@
 
 import os
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, LogInfo, OpaqueFunction
 from launch.conditions import IfCondition, LaunchConfigurationEquals, LaunchConfigurationNotEquals
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+
+
+def _have(pkg):
+    try:
+        get_package_share_directory(pkg)
+        return True
+    except PackageNotFoundError:
+        return False
+
+
+def hoverboard_base(context):
+    """The bridge plus the velocity safety chain; their topics depend on each other."""
+    if LaunchConfiguration('base').perform(context) != 'hoverboard':
+        return []
+    param_dir = os.path.join(get_package_share_directory('robot_bringup'), 'param')
+    monitor = LaunchConfiguration('collision_monitor').perform(context) == 'true'
+    mux_arg = LaunchConfiguration('cmd_mux').perform(context)
+    mux = mux_arg == 'true' or (mux_arg == 'auto' and _have('twist_mux'))
+    actions = []
+    if mux_arg == 'true' and not _have('twist_mux'):
+        raise RuntimeError('cmd_mux:=true but twist_mux is not installed: '
+                           'sudo apt install ros-humble-twist-mux')
+    if mux_arg == 'auto' and not mux:
+        actions.append(LogInfo(msg='twist_mux not installed (sudo apt install ros-humble-twist-mux): '
+                                   'the bridge takes /cmd_vel and /cmd_vel_manual directly, last message wins'))
+
+    nav_topic = 'cmd_vel_safe' if monitor else 'cmd_vel'
+    bridge_in = 'cmd_vel_mux' if mux else nav_topic
+
+    actions.append(Node(
+        package='esp_tcp_server',
+        executable='hoverboard_udp_bridge_node',
+        name='hoverboard_udp_bridge',
+        output='screen',
+        # Geometry and limits live in ONE file, shared with
+        # hoverboard_base_node/launch/base.launch.py. Only min_wheel_rpm can be
+        # overridden from the command line (min_wheel_rpm:=...).
+        parameters=[
+            os.path.join(get_package_share_directory('hoverboard_base_node'),
+                         'config', 'hoverboard_base.yaml'),
+            {'min_wheel_rpm': float(LaunchConfiguration('min_wheel_rpm').perform(context))},
+            # Exactly one node may own odom->base_footprint: the EKF if it
+            # runs, Cartographer with wheel_odom:=false, else the bridge.
+            {'publish_tf': LaunchConfiguration('ekf').perform(context) != 'true'
+                           and LaunchConfiguration('wheel_odom').perform(context) == 'true'},
+            # With the mux, manual commands may only arrive through it.
+            {'subscribe_cmd_vel_manual': not mux},
+        ],
+        remappings=[('cmd_vel', bridge_in)],
+    ))
+
+    if monitor:
+        actions.append(Node(
+            package='nav2_collision_monitor',
+            executable='collision_monitor',
+            name='collision_monitor',
+            output='screen',
+            parameters=[os.path.join(param_dir, 'collision_monitor_hoverboard.yaml')],
+        ))
+        # collision_monitor is a lifecycle node; this one brings it up and
+        # keeps it up, separately from Nav2's own lifecycle managers.
+        actions.append(Node(
+            package='nav2_lifecycle_manager',
+            executable='lifecycle_manager',
+            name='lifecycle_manager_safety',
+            output='screen',
+            parameters=[{'autostart': True, 'node_names': ['collision_monitor'],
+                         'bond_timeout': 0.0}],
+        ))
+
+    if mux:
+        actions.append(Node(
+            package='twist_mux',
+            executable='twist_mux',
+            name='twist_mux',
+            output='screen',
+            parameters=[os.path.join(param_dir, 'twist_mux_hoverboard.yaml')],
+            remappings=[('cmd_vel_out', 'cmd_vel_mux'), ('/cmd_vel_out', 'cmd_vel_mux')]
+                       + ([] if monitor else [('cmd_vel_safe', 'cmd_vel')]),
+        ))
+
+    actions.append(LogInfo(msg='velocity chain: ' + ' -> '.join(
+        ['/cmd_vel'] + (['collision_monitor', '/cmd_vel_safe'] if monitor else [])
+        + (['twist_mux (+ /cmd_vel_manual, /cmd_vel_lock)', '/cmd_vel_mux'] if mux
+           else ['(+ /cmd_vel_manual)']) + ['hoverboard_udp_bridge'])))
+    return actions
 
 
 def generate_launch_description():
@@ -118,26 +219,7 @@ def generate_launch_description():
     # /ultrasonic/right/*) and the LED states (/lights/left, /lights/right,
     # /lights/back). The avoidance reflex and the turn/stop lights run on the
     # ESP32 itself; those topics only report what it does.
-    base_hoverboard = Node(
-        package='esp_tcp_server',
-        executable='hoverboard_udp_bridge_node',
-        name='hoverboard_udp_bridge',
-        output='screen',
-        # Geometry and limits live in ONE file, shared with
-        # hoverboard_base_node/launch/base.launch.py. Only min_wheel_rpm can be
-        # overridden from the command line (min_wheel_rpm:=...).
-        parameters=[
-            os.path.join(get_package_share_directory('hoverboard_base_node'),
-                         'config', 'hoverboard_base.yaml'),
-            {'min_wheel_rpm': LaunchConfiguration('min_wheel_rpm')},
-            # Exactly one node may own odom->base_footprint: the EKF if it
-            # runs, Cartographer with wheel_odom:=false, else the bridge.
-            {'publish_tf': PythonExpression(
-                ["'", LaunchConfiguration('ekf'), "' != 'true' and '",
-                 LaunchConfiguration('wheel_odom'), "' == 'true'"])},
-        ],
-        condition=LaunchConfigurationEquals('base', 'hoverboard')
-    )
+    base_hoverboard = OpaqueFunction(function=hoverboard_base)
 
     # Wheel odometry + MPU9250 gyro -> odom->base_footprint (ekf:=true).
     ekf = Node(
@@ -235,6 +317,17 @@ def generate_launch_description():
         robot_state,
         robot_state_hoverboard,
         robot_joint,
+        DeclareLaunchArgument(
+            'collision_monitor', default_value='true', choices=['true', 'false'],
+            description='base:=hoverboard only - Nav2 collision_monitor between '
+                        '/cmd_vel and the wheels: slow down / stop from the LiDAR '
+                        'and sonars just ahead.'),
+        DeclareLaunchArgument(
+            'cmd_mux', default_value='auto', choices=['auto', 'true', 'false'],
+            description='base:=hoverboard only - twist_mux arbitration: manual '
+                        '(/cmd_vel_manual) over Nav2, /cmd_vel_lock holds still. '
+                        'auto = if ros-humble-twist-mux is installed.'),
+
         base_hoverboard,
         ekf,
         base_esp_tcp,

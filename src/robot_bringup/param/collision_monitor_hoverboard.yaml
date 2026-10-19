@@ -1,0 +1,74 @@
+# Nav2 collision_monitor for the hoverboard (robot_bringup collision_monitor).
+# Sits between Nav2 and twist_mux: /cmd_vel -> here -> /cmd_vel_safe. It slows
+# and stops Nav2's commands from the LiDAR and the three sonars, before the
+# ESP32's own sonar reflex has to act (front back-off at 350 mm).
+#
+# Manual driving (/cmd_vel_manual) does not pass through here: the person on
+# the stick decides, and the ESP32 reflex still protects the robot.
+#
+# Geometry, base_footprint frame (x forward, metres). The base is a 0.33 m
+# square, so the front edge is at x = 0.165. Both zones start 3.5 cm ahead of
+# the body (LiDAR noise is ~2 cm), so hits on the robot itself can never
+# trigger them; they are front-only, because Nav2 drives forwards (MPPI here
+# never reverses; the backup recovery is not covered).
+#
+#   PolygonStop  x 0.20..0.32, |y| <= 0.19   3+ points in it: stop
+#   PolygonSlow  x 0.20..0.60, |y| <= 0.24   3+ points in it: 40 % speed
+#
+# Placeholders until the sensors are mounted on the chassis, like the URDF
+# poses they rely on.
+collision_monitor:
+  ros__parameters:
+    use_sim_time: False
+    base_frame_id: "base_footprint"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "cmd_vel"
+    cmd_vel_out_topic: "cmd_vel_safe"
+    transform_tolerance: 0.3
+    # Readings older than this are ignored (sensor gone): the zones then see
+    # nothing from it.
+    source_timeout: 1.0
+    # Off: needs odom->base_footprint, which with wheel_odom:=false only exists
+    # once Cartographer runs. At 0.25 m/s the uncorrected lag is ~1 cm.
+    base_shift_correction: False
+    stop_pub_timeout: 2.0
+    polygons: ["PolygonStop", "PolygonSlow"]
+    PolygonStop:
+      type: "polygon"
+      points: [0.32, 0.19, 0.32, -0.19, 0.20, -0.19, 0.20, 0.19]
+      action_type: "stop"
+      max_points: 3
+      visualize: True
+      polygon_pub_topic: "polygon_stop"
+      enabled: True
+    PolygonSlow:
+      type: "polygon"
+      points: [0.60, 0.24, 0.60, -0.24, 0.20, -0.24, 0.20, 0.24]
+      action_type: "slowdown"
+      max_points: 3
+      slowdown_ratio: 0.4
+      visualize: True
+      polygon_pub_topic: "polygon_slowdown"
+      enabled: True
+    observation_sources: ["scan", "sonar_front", "sonar_left", "sonar_right"]
+    scan:
+      type: "scan"
+      topic: "/scan"
+      enabled: True
+    # Each sonar reading becomes an arc of points across its cone, one every
+    # obstacles_angle. No echo is published as max_range (2 m): outside both zones.
+    sonar_front:
+      type: "range"
+      topic: "/range/front"
+      obstacles_angle: 0.05
+      enabled: True
+    sonar_left:
+      type: "range"
+      topic: "/range/left"
+      obstacles_angle: 0.05
+      enabled: True
+    sonar_right:
+      type: "range"
+      topic: "/range/right"
+      obstacles_angle: 0.05
+      enabled: True
