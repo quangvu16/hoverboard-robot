@@ -583,9 +583,10 @@ kbd { font: .75em var(--mono); border: 1px solid var(--line); border-bottom-widt
               <text x="420" y="196">core 1</text>
               <text x="420" y="212" fill="var(--fg)">loop()</text>
               <text x="420" y="228">Wi-Fi + scan send</text>
-              <text x="420" y="300">safety:</text>
-              <text x="420" y="316">1 s cmd timeout</text>
-              <text x="420" y="332">sonar reflex</text>
+              <text x="420" y="292">safety:</text>
+              <text x="420" y="308">1 s cmd timeout</text>
+              <text x="420" y="324">sonar reflex</text>
+              <text x="420" y="340">battery stop</text>
             </g>
 
             <!-- left wires -->
@@ -613,9 +614,9 @@ kbd { font: .75em var(--mono); border: 1px solid var(--line); border-bottom-widt
               <rect x="650" y="138" width="270" height="138" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"></rect>
               <text x="664" y="162" fill="var(--fg)" font-weight="500">hoverboard_udp_bridge_node</text>
               <text x="664" y="182" fill="var(--muted)" font-size="11">→ /odom, /imu/data, /joint_states</text>
-              <text x="664" y="198" fill="var(--muted)" font-size="11">→ /ultrasonic/*, /lights/*</text>
-              <text x="664" y="214" fill="var(--muted)" font-size="11">→ /hoverboard/link_status</text>
-              <text x="664" y="238" fill="var(--muted)" font-size="11">← /cmd_vel, /cmd_vel_manual</text>
+              <text x="664" y="198" fill="var(--muted)" font-size="11">→ /ultrasonic/*, /range/*, /lights/*</text>
+              <text x="664" y="214" fill="var(--muted)" font-size="11">→ hoverboard/battery_state …</text>
+              <text x="664" y="238" fill="var(--muted)" font-size="11">← /cmd_vel_mux (safety chain, ch. 08)</text>
               <text x="664" y="254" fill="var(--muted)" font-size="11">← /Buzzer</text>
 
               <rect x="650" y="316" width="270" height="76" rx="8" fill="var(--surface)" stroke="var(--line)"></rect>
@@ -926,12 +927,12 @@ tools/ota_upload.sh firmware/ldrobot_ld14p_esp32s3_mpu9250_ros 192.168.1.50</pre
         <table>
           <thead><tr><th>Package</th><th>Role</th></tr></thead>
           <tbody>
-            <tr><td><code>esp_tcp_server</code></td><td>The translation layer. Its three nodes are <code>hoverboard_udp_bridge_node</code>, <code>udp_lidar_receiver_node</code> and the older <code>esp_tcp_server_node</code> (TCP 9000, length-prefixed JSON).</td></tr>
+            <tr><td><code>esp_tcp_server</code></td><td>The translation layer. Its three nodes are <code>hoverboard_udp_bridge_node</code> (which also publishes the sonars as <code>/range/*</code> and the ESP32's battery state), <code>udp_lidar_receiver_node</code> and the older <code>esp_tcp_server_node</code> (TCP 9000, length-prefixed JSON).</td></tr>
             <tr><td><code>hoverboard_base_node</code></td><td>Holds <code>config/hoverboard_base.yaml</code>, the <em>only</em> place for wheel radius, track width, ticks per revolution and speed limits.</td></tr>
             <tr><td><code>hoverboard_description</code></td><td><code>hoverboard.urdf</code>: a 0.33 m chassis with frames <code>base_footprint → base_link → base_scan, imu_link, sonar_*</code>.</td></tr>
-            <tr><td><code>robot_bringup</code></td><td><code>robot_bringup.launch.py</code> starts the base, LiDAR, URDF and EKF. Also <code>robot_slam.launch.py</code> and <code>param/ekf_hoverboard.yaml</code>.</td></tr>
+            <tr><td><code>robot_bringup</code></td><td><code>robot_bringup.launch.py</code> starts the base, LiDAR, URDF and EKF, plus the <a href="#operate">safety chain</a>: <code>collision_monitor</code> and <code>twist_mux</code>. Also <code>robot_slam.launch.py</code> and <code>param/ekf_hoverboard.yaml</code>.</td></tr>
             <tr><td><code>robot_cartographer</code></td><td>Cartographer, Nav2 and RViz in one launch, plus <code>save_map</code>, <code>initialpose_relay</code> and the LiDAR+IMU-only configs.</td></tr>
-            <tr><td><code>robot_navigation</code></td><td><code>param/hoverboard.yaml</code>, the Nav2 tuning for this base, and <code>navigation2.launch.py</code>.</td></tr>
+            <tr><td><code>robot_navigation</code></td><td><code>param/hoverboard.yaml</code>, the Nav2 tuning for this base (including the sonar range layer), and <code>navigation2.launch.py</code>.</td></tr>
             <tr><td><code>hoverboard_ctrl / _laser / _nav / _camera / _multi …</code></td><td>Ports of the Yahboom packages: gamepad, obstacle avoidance and tracking, calibration, patrol and multi-robot. See <code>HOVERBOARD_PACKAGES.md</code>.</td></tr>
             <tr><td><code>auto_mapper</code>, <code>m-explore-ros2</code>, <code>full_coverage_path_planner</code></td><td>Vendored frontier explorers and a coverage planner. Each has an <code>UPSTREAM_COMMIT</code> file.</td></tr>
           </tbody>
@@ -1050,7 +1051,11 @@ python3 ~/robot_ws/tools/calib_wheel_separation.py   <span class="c"># odom yaw 
               <tr><td>Mainboard</td><td class="num">0.8 s UART silence</td><td>Zeroes its command</td></tr>
               <tr><td>ESP32</td><td class="num">1 s with no HBC1</td><td>Zeroes the ROS request and keeps the mainboard armed with zeros</td></tr>
               <tr><td>ESP32 sonar</td><td class="num">front &lt; 350 mm · side &lt; 50 mm</td><td>Reverses, or turns away, for at most 1.5 s. Works with Wi-Fi down.</td></tr>
-              <tr><td>Bridge</td><td class="num">cmd_timeout_s 0.5 s</td><td>Sends an explicit stop when <code>/cmd_vel</code> goes quiet</td></tr>
+              <tr><td>ESP32 battery</td><td class="num">&lt; 35.5 V · &lt; 34.5 V</td><td>Halves every wheel command, then holds the wheels at zero until the pack is charged (above 37.0 V). Works with Wi-Fi down.</td></tr>
+              <tr><td>ESP32 drive page</td><td class="num">0.5 s with no web command</td><td>Zeroes the wheels and hands them back to ROS</td></tr>
+              <tr><td>Bridge</td><td class="num">cmd_timeout_s 0.5 s</td><td>Sends an explicit stop when <code>/cmd_vel_mux</code> goes quiet</td></tr>
+              <tr><td>twist_mux</td><td class="num"><code>/cmd_vel_lock</code> true</td><td>Holds the robot still against Nav2 and every stick</td></tr>
+              <tr><td>Collision monitor</td><td class="num">object &lt; 0.60 m · &lt; 0.32 m ahead</td><td>Slows Nav2 to 40 %, then stops it (LiDAR and sonars)</td></tr>
             </tbody>
           </table>
         </div>
@@ -1381,10 +1386,13 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
               <tr><td><b>Goal</b> mode (G)</td><td>Click where the robot should go. Drag to set the heading it ends at. With a plain click, it faces the way it drove. A new goal replaces the active one.</td></tr>
               <tr><td><b>Set pose</b> mode (P)</td><td>Click where the robot really is and drag the way it faces. This publishes <code>/initialpose</code>, which AMCL reads directly. Cartographer reads it through <code>initialpose_relay</code>, only when a <code>.pbstream</code> map is loaded.</td></tr>
               <tr><td><b>Pan</b> (M), + / − / Fit / Robot</td><td>Move and zoom the map. The scroll wheel zooms around the cursor, and Robot centres the map on the robot.</td></tr>
+              <tr><td><b>Drive</b> stick, <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Drives by hand on <code>/cmd_vel_manual</code>, which beats Nav2. Grabbing it cancels the active goal; letting go stops.</td></tr>
+              <tr><td><b>Hold still</b> / <b>Release</b></td><td>The <code>twist_mux</code> lock: holds the robot against Nav2 and every stick, and greys the stick. The label shows the lock whoever set it.</td></tr>
+              <tr><td>Battery pill, sonar line</td><td>The ESP32's battery state and voltage (orange when it limits speed, red when it holds the wheels) and the front, left and right sonar distances.</td></tr>
               <tr><td><b>Cancel goal</b></td><td>Stops the active goal.</td></tr>
               <tr><td><b>Saved spots</b></td><td>Name the robot's current position, then tap Go to send it back there. Spots are saved in that browser only.</td></tr>
               <tr><td>Status panel</td><td>Shows Driving, Arrived, Failed or Cancelled, with distance left, time left, time driving and recoveries, all from Nav2's feedback.</td></tr>
-              <tr><td>Header pills</td><td>Show the websocket connection, the stack in use, whether Nav2 is ready, and the map size and resolution.</td></tr>
+              <tr><td>Header pills</td><td>Show the websocket connection, the stack in use, whether Nav2 is ready, the map size and resolution, and the battery.</td></tr>
             </tbody>
           </table>
         </div>
@@ -1403,6 +1411,10 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
               <tr><td><code>/web/robot_pose</code></td><td><code>geometry_msgs/PoseStamped</code></td><td>from robot</td><td class="num">5 Hz</td></tr>
               <tr><td><code>/web/nav_status</code></td><td><code>std_msgs/String</code> (JSON)</td><td>from robot</td><td><code>state</code>, <code>goal</code>, <code>distance_remaining</code>, <code>eta_s</code>, <code>nav_time_s</code>, <code>recoveries</code>, <code>stack</code>, <code>server_ready</code></td></tr>
               <tr><td><code>/map</code>, <code>/plan</code></td><td><code>OccupancyGrid</code>, <code>Path</code></td><td>from robot</td><td>straight from the stack</td></tr>
+              <tr><td><code>/cmd_vel_manual</code></td><td><code>geometry_msgs/Twist</code></td><td>to robot</td><td>drive stick, 10 Hz while held</td></tr>
+              <tr><td><code>/cmd_vel_lock</code></td><td><code>std_msgs/Bool</code></td><td>both</td><td>true = hold still (needs <code>twist_mux</code>)</td></tr>
+              <tr><td><code>/hoverboard/battery_state</code>, <code>_volts</code></td><td><code>String</code>, <code>Float32</code></td><td>from robot</td><td><code>ok</code> / <code>low</code> / <code>critical</code>; the state is latched</td></tr>
+              <tr><td><code>/range/{front,left,right}</code></td><td><code>sensor_msgs/Range</code></td><td>from robot</td><td class="num">10 Hz; 2 m = no echo</td></tr>
             </tbody>
           </table>
         </div>
