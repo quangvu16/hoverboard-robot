@@ -378,6 +378,30 @@ static const uint32_t IMU_I2C_HZ = 400000;     // 100000 on long or noisy wires
 // errors.
 static const uint32_t IMU_RETRY_MS = 2000;
 
+// ------------------------------------------------------------------- battery
+// Low-battery protection (battery.h), from the voltage the mainboard reports.
+// Per-cell thresholds for the stock 10S (36 V) hoverboard pack. Keep CRIT
+// above the mainboard's BAT_DEAD (3.37 V/cell upstream), which powers the
+// board off without warning. If the mainboard's voltage reading is off, fix
+// its BAT_CALIB_* first: these trust it.
+#ifndef BAT_PROTECT_ENABLED
+#define BAT_PROTECT_ENABLED 1
+#endif
+#define BAT_BEEP_ENABLED 1
+static constexpr float BAT_CELLS              = 10;     // must match the mainboard's BAT_CELLS
+static constexpr float BAT_LOW_V_PER_CELL     = 3.55f;  // 35.5 V: limit speed, chirp
+static constexpr float BAT_CRIT_V_PER_CELL    = 3.45f;  // 34.5 V: stop the wheels
+static constexpr float BAT_RECOVER_V_PER_CELL = 3.70f;  // 37.0 V: back to normal (charged)
+static constexpr float BAT_LOW_SPEED_SCALE    = 0.5f;   // wheel targets x this while LOW
+static constexpr float BAT_FILTER_S           = 5.0f;   // low-pass time constant (sag)
+static const uint32_t BAT_CONFIRM_MS         = 10000;  // past a threshold this long
+static const uint32_t BAT_SAMPLE_MS          = 100;
+static const uint32_t BAT_LOW_BEEP_MS        = 30000;  // one chirp per period while LOW
+static const uint32_t BAT_CRIT_BEEP_MS       = 5000;   // two chirps per period while CRITICAL
+static_assert(BAT_CRIT_V_PER_CELL < BAT_LOW_V_PER_CELL && BAT_LOW_V_PER_CELL < BAT_RECOVER_V_PER_CELL,
+              "battery thresholds must be CRIT < LOW < RECOVER");
+static_assert(BAT_CRIT_V_PER_CELL > 3.37f, "CRIT must stay above the mainboard's BAT_DEAD (3.37 V/cell)");
+
 // ------------------------------------------------------------- web drive
 // Drive page + WebSocket served by this board (web_drive.h): open
 // http://<board-ip>/ or http://WEB_DRIVE_HOSTNAME.local/ on a phone on the same

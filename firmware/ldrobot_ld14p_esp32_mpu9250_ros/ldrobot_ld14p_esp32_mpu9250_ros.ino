@@ -19,13 +19,14 @@
 //
 //   config.h       ALL set-up data: pin map, WiFi, ports,   <- the only file
 //                  LiDAR model, mainboard mirror, speed        you edit
-//                  loop, sonars, lights, buzzer
+//                  loop, sonars, lights, buzzer, battery
 //   hoverboard.h   mainboard USART driver
 //   sonar.h        three HC-SR04s and the avoidance reflex
 //   lights.h       turn signals and stop light
 //   lidar_ld14.h   LD14 decoder, scan binning, LDS1 sender
 //   mpu9250.h      MPU9250 IMU (I2C raw + ESP32 fusion), in every HBT1
 //   hb_link.h      HBT1/HBC1 datagrams and the hoverboard task
+//   battery.h      low-battery protection: limit speed, then stop
 //   web_drive.h    drive page + WebSocket server (no PC needed)
 //   web_page.h     the page itself
 //

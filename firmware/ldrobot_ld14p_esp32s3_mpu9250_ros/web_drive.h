@@ -24,8 +24,9 @@
 //                                +-WEB_DRIVE_MAX_RPM
 //   "S"                          stop
 // board -> page, every WEB_STATUS_PERIOD_MS, one JSON object:
-//   {"mb":1,"b":36.4,"rl":0.0,"rr":0.0,"sf":512,"sl":0,"sr":0,
+//   {"mb":1,"b":36.4,"bat":"ok","rl":0.0,"rr":0.0,"sf":512,"sl":0,"sr":0,
 //    "near":0,"rfx":"","own":"idle","max":60}
+//   bat = "ok", "low", "critical" or "unknown" (battery.h)
 //   own = "web" (stick), "ROS" (HBC1 in the last second) or "idle".
 
 #pragma once
@@ -44,11 +45,11 @@
 // The web task only ever writes web_cmd and reads web_status; the hoverboard
 // task does the reverse. Both under web_mux, both tiny.
 struct WebCmd    { float l, r; uint32_t seq; };
-struct WebStatus { bool mb, near; float batt, rpm_l, rpm_r; uint16_t sf, sl, sr; const char * reflex; const char * own; };
+struct WebStatus { bool mb, near; float batt, rpm_l, rpm_r; uint16_t sf, sl, sr; const char * reflex; const char * own; const char * bat; };
 
 static portMUX_TYPE web_mux = portMUX_INITIALIZER_UNLOCKED;
 static WebCmd    web_cmd = {0.0f, 0.0f, 0};
-static WebStatus web_status = {false, false, 0, 0, 0, 0, 0, 0, "none", "idle"};
+static WebStatus web_status = {false, false, 0, 0, 0, 0, 0, 0, "", "idle", "unknown"};
 
 static void webPost(float l, float r) {
   l = constrain(l, -WEB_DRIVE_MAX_RPM, WEB_DRIVE_MAX_RPM);
@@ -96,6 +97,7 @@ static void webDrivePublish(Hoverboard & hb, bool near, const char * reflex, uin
   s.sf = sf; s.sl = sl; s.sr = sr;
   s.reflex = reflex;
   s.own = web_owns ? "web" : (millis() - ros_last_ms < 1000 ? "ROS" : "idle");
+  s.bat = batteryStateName();
   portENTER_CRITICAL(&web_mux);
   web_status = s;
   portEXIT_CRITICAL(&web_mux);
@@ -239,11 +241,11 @@ static void webSendStatus() {
   portENTER_CRITICAL(&web_mux);
   const WebStatus s = web_status;
   portEXIT_CRITICAL(&web_mux);
-  char buf[200];
+  char buf[256];
   const int n = snprintf(buf, sizeof(buf),
-      "{\"mb\":%d,\"b\":%.1f,\"rl\":%.1f,\"rr\":%.1f,\"sf\":%u,\"sl\":%u,\"sr\":%u,"
+      "{\"mb\":%d,\"b\":%.1f,\"bat\":\"%s\",\"rl\":%.1f,\"rr\":%.1f,\"sf\":%u,\"sl\":%u,\"sr\":%u,"
       "\"near\":%d,\"rfx\":\"%s\",\"own\":\"%s\",\"max\":%.0f}",
-      s.mb, s.batt, s.rpm_l, s.rpm_r, s.sf, s.sl, s.sr, s.near, s.reflex, s.own, WEB_DRIVE_MAX_RPM);
+      s.mb, s.batt, s.bat, s.rpm_l, s.rpm_r, s.sf, s.sl, s.sr, s.near, s.reflex, s.own, WEB_DRIVE_MAX_RPM);
   if (n > 0) wsSend(0x1, buf, (size_t)min(n, (int)sizeof(buf) - 1));
 }
 

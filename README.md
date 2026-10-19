@@ -41,7 +41,7 @@ The ESP32 only knows RPM and ticks. All geometry in metres lives in one file,
 | Datagram | Port | Direction | Contents |
 |---|---|---|---|
 | `LDS1` | UDP 9900 | ESP32 → PC | 360 LiDAR ranges in mm |
-| `HBT1` | UDP 9902 | ESP32 → PC | wheel ticks, RPM, battery, sonars, lights, IMU (74 bytes) |
+| `HBT1` | UDP 9902 | ESP32 → PC | wheel ticks, RPM, battery, sonars, lights, IMU, battery state (78 bytes) |
 | `HBC1` | UDP 9901 | PC → ESP32 | wheel RPM targets, buzzer |
 
 ## Hardware
@@ -81,6 +81,29 @@ cp $S/secrets.h.example $S/secrets.h   # then edit WIFI_SSID / WIFI_PASS
 arduino-cli compile --fqbn esp32:esp32:esp32 $S
 arduino-cli upload  --fqbn esp32:esp32:esp32:UploadSpeed=115200 -p /dev/ttyUSB0 $S
 ```
+
+### Low-battery protection
+
+Both MPU9250 sketches watch the battery voltage the mainboard reports (`battery.h`), so the
+robot stops on purpose before the pack is ruined or the mainboard cuts power:
+
+| State | Filtered voltage (10S pack) | What the ESP32 does |
+|---|---|---|
+| ok | above 35.5 V | nothing |
+| low | below 35.5 V (3.55 V/cell) | halves every wheel command and chirps every 30 s |
+| critical | below 34.5 V (3.45 V/cell) | holds the wheels at zero, whatever ROS or the web stick asks, and double-chirps every 5 s |
+
+- The voltage is low-pass filtered (5 s) and must stay past a threshold for 10 s, so a hard
+  launch that sags the pack doesn't trip it.
+- Going back to ok needs 37.0 V, which in practice means charging or a fresh pack. A pack
+  that recovers a little at rest doesn't restart the robot.
+- Critical sits above the mainboard's own power-off level (`BAT_DEAD`, 3.37 V/cell
+  upstream), which cuts power without warning.
+- The thresholds, cell count, speed factor and beeps are in the battery section of
+  `config.h`. They trust the mainboard's voltage reading, so calibrate its `BAT_CALIB_*` first.
+- ROS sees the state on `/hoverboard/battery_state` (`ok` / `low` / `critical` / `unknown`,
+  latched) and in `/hoverboard/link_status`. The bridge logs every change. The ESP32 drive
+  page shows it too.
 
 ### Drive from a phone, no PC needed
 

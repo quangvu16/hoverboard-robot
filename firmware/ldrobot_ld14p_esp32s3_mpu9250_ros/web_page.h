@@ -60,6 +60,7 @@ dt { color:var(--muted); font-size:.88rem; } dd { margin:0; font:.88rem var(--mo
     <span class="pill" id="pConn">connecting…</span>
     <span class="pill" id="pOwn">wheels ?</span>
     <span class="pill" id="pSonar">sonar ?</span>
+    <span class="pill" id="pBat">battery ?</span>
   </header>
   <div class="card">
     <div class="pad off" id="pad" role="application" aria-label="Drive stick: drag to drive, release to stop">
@@ -100,7 +101,7 @@ function connect() {
   s.onclose = () => {
     if (ws !== s) return;
     live = false; release(); drive.keys.clear(); pad.classList.add('off');
-    pill('pConn', 'disconnected', 'bad'); pill('pOwn', 'wheels ?', ''); pill('pSonar', 'sonar ?', '');
+    pill('pConn', 'disconnected', 'bad'); pill('pOwn', 'wheels ?', ''); pill('pSonar', 'sonar ?', ''); pill('pBat', 'battery ?', '');
     setTimeout(connect, 2000);
   };
   s.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } status(m); };
@@ -115,6 +116,9 @@ function status(m) {
   $('rfx').textContent = m.rfx || 'none';
   pill('pOwn', 'wheels: ' + m.own, m.own === 'web' ? 'ok' : (m.own === 'ROS' ? 'warn' : ''));
   pill('pSonar', m.near ? 'obstacle ahead' : 'sonar clear', m.near ? 'warn' : 'ok');
+  const B = { ok: ['battery ok', 'ok'], low: ['battery low: speed limited', 'warn'],
+              critical: ['battery critical: stopped', 'bad'] }[m.bat] || ['battery ?', ''];
+  pill('pBat', B[0], B[1]);
 }
 
 const vMax = () => +$('v').value, wMax = () => +$('w').value;

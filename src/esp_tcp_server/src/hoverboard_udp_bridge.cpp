@@ -3,7 +3,7 @@
 // ROS 2 side of a hoverboard link that carries wheel telemetry and commands on
 // two UDP sockets:
 //
-//   ESP32 -> here   "HBT1" telemetry, 42-74 bytes, 50 Hz, arrives on telem_port
+//   ESP32 -> here   "HBT1" telemetry, 42-78 bytes, 50 Hz, arrives on telem_port
 //   here  -> ESP32  "HBC1" wheel command, 12 bytes, sent at cmd_rate_hz
 //
 // The ESP32 side is ~/Arduino/ldrobot_ld14p_esp32_mpu9250_ros, which also sends the
@@ -44,9 +44,13 @@
 //                             68  6  accel x,y,z  int16 x3, 1/100 m/s^2
 //    imu_status bit0 found, bit1 fresh, bit10 compass (NDOF), bits 2-3/4-5/
 //               6-7/8-9 calibration 0..3 of sys/gyro/accel/mag
+//                             74  1  bat_state    0 unknown 1 ok 2 low 3 critical
+//                             75  1  bat_cells
+//                             76  2  bat_filtered uint16, centi-volts
 //
 // Fields were appended over time: 42 bytes from the oldest firmware, 44 with
-// the front sonar, 52 with the left/right sonars, 74 with the IMU (MPU9250; BNO055 units). Every
+// the front sonar, 52 with the left/right sonars, 74 with the IMU (MPU9250; BNO055 units), 78 with the
+// ESP32's low-battery state (it limits speed / stops by itself). Every
 // length is accepted; each topic group is only published when its field is
 // present. The IMU fields are in the chip's axes, stamped in imu_frame; the
 // URDF's imu_joint rotates them onto base_link.
@@ -100,6 +104,7 @@ constexpr uint16_t HBT_LEN = 42;
 constexpr uint16_t HBT_LEN_SONAR = 44;
 constexpr uint16_t HBT_LEN_SIDE_SONARS = 52;
 constexpr uint16_t HBT_LEN_IMU = 74;
+constexpr uint16_t HBT_LEN_BATTERY = 78;   // + low-battery state (firmware battery.h)
 constexpr uint16_t HBC_LEN = 12;
 
 constexpr uint16_t HBT_FLAG_MAINBOARD_UP = 0x0001;
@@ -207,6 +212,11 @@ public:
     pub_odom_   = create_publisher<nav_msgs::msg::Odometry>("odom", 10);
     pub_link_   = create_publisher<std_msgs::msg::String>("hoverboard/link_status", 10);
     pub_batt_   = create_publisher<std_msgs::msg::Float32>("hoverboard/battery_volts", 10);
+    // The ESP32's low-battery state, on change only; latched so a late
+    // `ros2 topic echo` still shows it. "ok", "low" (speed limited by the
+    // ESP32), "critical" (wheels stopped by the ESP32) or "unknown".
+    pub_batt_state_ = create_publisher<std_msgs::msg::String>(
+      "hoverboard/battery_state", rclcpp::QoS(1).transient_local());
     pub_joints_ = create_publisher<sensor_msgs::msg::JointState>("wheel_joint_states", 10);
     // Same topics and types esp_tcp_server_node publishes, so consumers do not
     // care which base link is running.
@@ -342,6 +352,7 @@ private:
         handle_lights(buf);   // same firmware generation as the side sonars
       }
       if (n >= (ssize_t)HBT_LEN_IMU) handle_imu(buf);
+      if (n >= (ssize_t)HBT_LEN_BATTERY) handle_battery(buf);
     }
   }
 
@@ -488,6 +499,29 @@ private:
     (reverse_direction_ ? pub_light_left_ : pub_light_right_)->publish(on);
     on.data = (flags & HBT_FLAG_LIGHT_BACK) != 0;
     pub_light_back_->publish(on);
+  }
+
+  // Bytes 74-77: state, cell count, filtered centi-volts. The ESP32 acts on
+  // it by itself (battery.h); this side only reports.
+  void handle_battery(const uint8_t* b) {
+    static const char* const NAMES[] = {"unknown", "ok", "low", "critical"};
+    const uint8_t st = b[74] & 3;
+    const double vf = rd_u16(b + 76) / 100.0;
+    battery_state_ = NAMES[st];
+    if (st == last_batt_state_) return;
+    last_batt_state_ = st;
+    std_msgs::msg::String m;
+    m.data = battery_state_;
+    pub_batt_state_->publish(m);
+    const unsigned cells = b[75] ? b[75] : 1;
+    if (st == 3)
+      RCLCPP_ERROR(get_logger(), "battery CRITICAL at %.2f V (%.2f V/cell): the ESP32 has stopped "
+                   "the wheels until the pack is charged", vf, vf / cells);
+    else if (st == 2)
+      RCLCPP_WARN(get_logger(), "battery LOW at %.2f V (%.2f V/cell): the ESP32 limits speed",
+                  vf, vf / cells);
+    else
+      RCLCPP_INFO(get_logger(), "battery %s (%.2f V)", NAMES[st], vf);
   }
 
   void handle_imu(const uint8_t* b) {
@@ -682,8 +716,10 @@ private:
     } else {
       char b[160];
       std::snprintf(b, sizeof(b),
-        "esp:up mainboard:up fb=%uB batt=%.2fV frames=%u cksum_err=%u%s",
-        (unsigned)fb_bytes_, battery_volts_, (unsigned)frame_count_,
+        "esp:up mainboard:up fb=%uB batt=%.2fV%s%s frames=%u cksum_err=%u%s",
+        (unsigned)fb_bytes_, battery_volts_,
+        battery_state_.empty() ? "" : " batt_state=", battery_state_.c_str(),
+        (unsigned)frame_count_,
         (unsigned)checksum_err_, esp_cmd_timeout_ ? " [ESP CMD TIMEOUT]" : "");
       s = b;
     }
@@ -761,6 +797,8 @@ private:
   uint32_t frame_count_{0};
   uint32_t checksum_err_{0};
   double battery_volts_{0.0};
+  std::string battery_state_;            // empty = firmware too old to say
+  int last_batt_state_{-1};
   int last_state_{-1};
 
   // Command state
@@ -773,6 +811,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr pub_odom_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_link_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr pub_batt_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr pub_batt_state_;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_joints_;
   rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr pub_sonar_dist_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_sonar_near_;

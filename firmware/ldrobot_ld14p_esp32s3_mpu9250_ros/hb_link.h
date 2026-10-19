@@ -12,7 +12,7 @@
 //
 // Little-endian both ways.
 //
-//   ESP32 -> PC, "HBT1", 74 bytes, every HB_TELEM_PERIOD_MS, to HB_TELEM_PORT
+//   ESP32 -> PC, "HBT1", 78 bytes, every HB_TELEM_PERIOD_MS, to HB_TELEM_PORT
 //     0   4  "HBT1"            14  4  ticks_left   int32, running total
 //     4   2  seq       uint16  18  4  ticks_right  int32, running total
 //     6   4  millis    uint32  22  2  rpm_left     int16, measured, + = fwd
@@ -43,6 +43,11 @@
 //                              62  6  gyro x,y,z   int16 x3, 1/16 deg/s
 //                              68  6  accel x,y,z  int16 x3, 1/100 m/s^2,
 //                                     gravity included
+//                              74  1  bat_state    uint8, 0 unknown 1 ok
+//                                     2 low (speed limited) 3 critical
+//                                     (wheels stopped), battery.h
+//                              75  1  bat_cells    uint8
+//                              76  2  bat_filtered uint16, centi-volts
 //    imu_status bit0 IMU found   bit1 sample fresh   bit10 compass (never)
 //               bits 2-3 / 4-5 / 6-7 / 8-9 calibration 0..3 of
 //               sys / gyro / accel / mag (MPU9250: see imuStatus())
@@ -79,9 +84,10 @@
 HardwareSerial HbSerial(2);
 Hoverboard     hoverboard;
 
+#include "battery.h"     // after hoverboard.h: low-battery protection
 #include "web_drive.h"   // after hoverboard.h: the drive page (web_drive.h)
 
-static const uint16_t HB_TELEM_LEN = 74;
+static const uint16_t HB_TELEM_LEN = 78;
 static const uint16_t HB_CMD_LEN   = 12;
 
 static const uint16_t HBT_MAINBOARD_UP  = 0x0001;
@@ -103,7 +109,8 @@ static const uint16_t HBT_LIGHT_BACK    = 0x8000;
 static const uint16_t HBC_ENABLE        = 0x0001;
 static const uint16_t HBC_BUZZER        = 0x0002;
 
-static bool hb_buzzer = false;
+static bool hb_buzzer = false;       // what the pin is doing
+static bool hb_buzzer_ros = false;   // what HBC1 last asked for
 
 static void hbSetBuzzer(bool on) {
   if (on == hb_buzzer) return;
@@ -188,6 +195,10 @@ static void hbSendTelemetry() {
   for (int i = 0; i < 3; i++) put16(hb_tx_buf, 62 + 2 * i, (uint16_t)imu_sample.gyro[i]);
   for (int i = 0; i < 3; i++) put16(hb_tx_buf, 68 + 2 * i, (uint16_t)imu_sample.accel[i]);
 
+  hb_tx_buf[74] = (uint8_t)bat_state;
+  hb_tx_buf[75] = (uint8_t)BAT_CELLS;
+  put16(hb_tx_buf, 76, (uint16_t)constrain(lroundf(bat_vf * 100.0f), 0L, 65535L));
+
   if (hb_udp.beginPacket(dest_ip, (uint16_t)HB_TELEM_PORT) == 1) {
     hb_udp.write(hb_tx_buf, HB_TELEM_LEN);
     hb_udp.endPacket();
@@ -228,7 +239,7 @@ static void hbReceiveCommands() {
 
   // The web stick (web_drive.h) wins while it is held.
   if (!webDriveOwns()) hoverboard.setWheelRPM(want_l, want_r);
-  hbSetBuzzer((flags & HBC_BUZZER) != 0);
+  hb_buzzer_ros = (flags & HBC_BUZZER) != 0;
 }
 
 // The obstacle reflex sits between the network and the wheels, so it
@@ -250,7 +261,10 @@ static void hbApplyReflex() {
     return;
   }
   sonarGate(&l, &r);
-  hoverboard.setOutputRPM(l, r);
+  // Battery last, so it also limits the reflex: a critical pack stops even a
+  // back-off (battery.h).
+  const float k = batterySpeedScale();
+  hoverboard.setOutputRPM(l * k, r * k);
 }
 
 static void hbLog() {
@@ -301,6 +315,7 @@ static void hbLog() {
   }
   if (sonar_reflex != REFLEX_NONE)
     Serial.printf("sonar reflex: %s\n", sonarReflexName());
+  batteryLog();
   imuLog();
 }
 
@@ -351,6 +366,7 @@ static void hoverboardTask(void * arg) {
     }
 
     webDriveApply(hoverboard);   // web stick command, or hand back to ROS
+    batteryUpdate(hoverboard);
     hbApplyReflex();
     lightsUpdate(hoverboard);
     if (millis() - last_web_ms >= WEB_STATUS_PERIOD_MS) {
@@ -358,8 +374,9 @@ static void hoverboardTask(void * arg) {
       webDrivePublish(hoverboard, sonar.obstacleNear(), sonarReflexName(),
                       sonar.distanceMm(), sonarLeft.distanceMm(), sonarRight.distanceMm());
     }
-    // Same safety rule as the wheels: no commands, no noise.
-    if (hoverboard.isTimedOut()) hbSetBuzzer(false);
+    // ROS's buzzer follows the wheels' rule (no commands, no noise); the
+    // battery's chirps sound regardless.
+    hbSetBuzzer((hb_buzzer_ros && !hoverboard.isTimedOut()) || batteryBeep());
     hoverboard.transmit();
 
     const uint32_t now = millis();
@@ -393,6 +410,10 @@ static void hbBegin() {
                 LED_LEFT_PIN, LED_RIGHT_PIN, LED_BACK_PIN);
 
   imuBegin();     // ~50 ms power-on wait; before the tasks
+
+  Serial.printf("battery %d cells: low <%.1f V (speed x%.1f), critical <%.1f V (stop), "
+                "recover >%.1f V%s\n", (int)BAT_CELLS, BAT_LOW_V, BAT_LOW_SPEED_SCALE,
+                BAT_CRIT_V, BAT_RECOVER_V, BAT_PROTECT_ENABLED ? "" : "  [DISABLED]");
 
   hoverboard.begin(&HbSerial);
   Serial.printf("hover  UART2 @ %lu baud, RX=GPIO%d TX=GPIO%d, "
