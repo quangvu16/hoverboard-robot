@@ -37,6 +37,7 @@ header h1 { font-size: 1rem; margin: 0 8px 0 0; letter-spacing: -0.01em; }
 canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; background: var(--sunk); }
 canvas.pan { cursor: grab; }
 .overlay { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; padding: 16px; text-align: center; color: var(--muted); }
+.overlay[hidden] { display: none; }   /* display: grid above would beat the hidden attribute */
 .tools { position: absolute; left: 12px; top: 12px; display: flex; flex-wrap: wrap; gap: 6px; }
 .tools .seg { display: flex; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .tools button { font: 500 0.85rem var(--ui); border: 0; background: transparent; color: var(--fg); padding: 7px 11px; cursor: pointer; }
@@ -81,6 +82,11 @@ button.stop { background: var(--bad); color: #fff; margin-top: 10px; }
 .lockrow { align-items: center; margin-top: 8px; }
 .lockrow span { flex: 1; font-size: 0.85rem; color: var(--muted); }
 .lockrow span.on { color: var(--bad); font-weight: 600; }
+.dockbtns { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
+.dockbtns button { font: 500 0.85rem var(--ui); padding: 7px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); cursor: pointer; }
+.dockbtns button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.dockbtns button:disabled { opacity: 0.45; cursor: default; }
+.autodock { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 0.85rem; color: var(--muted); }
 .drivehead { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
 .drivehead h2 { margin: 0; }
 .keys { font-size: 0.78rem; color: var(--muted); margin-top: 6px; }
@@ -142,6 +148,16 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         <button id="btnHold">Hold still</button><button id="btnRelease">Release</button>
       </div>
       <div class="keys">Keys: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows to drive, <kbd>Space</kbd> to stop. Release = stop.</div>
+    </section>
+    <section>
+      <h2>Dock</h2>
+      <div class="state"><span class="dot" id="kDot"></span><span id="kState">dock ?</span></div>
+      <div class="msg" id="kMsg">Needs robot_docking (web_nav.launch.py docking:=true).</div>
+      <div class="dockbtns">
+        <button class="primary" id="btnDock">Dock</button><button id="btnUndock">Undock</button>
+        <button id="btnDockSave" title="The robot is sitting in its dock now: remember this pose">Set dock here</button><button id="btnDockCancel">Cancel</button>
+      </div>
+      <label class="autodock"><input type="checkbox" id="kAuto"> Dock by itself when the battery is low</label>
     </section>
     <section>
       <h2>Navigation</h2>
@@ -220,12 +236,18 @@ const tBattVolts = T('/hoverboard/battery_volts', 'std_msgs/msg/Float32', { thro
 const SIDES = ['front', 'left', 'right'];
 const tRange = SIDES.map(s => T('/range/' + s, 'sensor_msgs/msg/Range', { throttle_rate: 200, queue_length: 1 }));
 const tLock = T('/cmd_vel_lock', 'std_msgs/msg/Bool');
+// Docking (robot_docking dock_manager) and the standard BatteryState.
+const tDockCmd = T('/dock/command', 'std_msgs/msg/String');
+const tDockStatus = T('/dock/status', 'std_msgs/msg/String');
+const tBattery = T('/battery_state', 'sensor_msgs/msg/BatteryState', { throttle_rate: 1000, queue_length: 1 });
 
 function subscribeAll() {
   tMap.subscribe(onMap); tPose.subscribe(onPose); tStatus.subscribe(onStatus); tPlan.subscribe(onPlan);
   tNear.subscribe(onNear); $('pad').classList.remove('off');
   tBattState.subscribe(m => { batt.state = m.data; showBattery(); });
   tBattVolts.subscribe(m => { batt.volts = m.data; showBattery(); });
+  tBattery.subscribe(m => { batt.pct = m.percentage; showBattery(); });
+  tDockStatus.subscribe(onDockStatus);
   tRange.forEach((t, i) => t.subscribe(m => {
     // The bridge sends exactly max_range for "no echo".
     sonar[i] = m.range == null || m.range >= m.max_range - 1e-3 ? Infinity : m.range; showSonar();
@@ -237,7 +259,8 @@ function subscribeAll() {
   });
 }
 function unsubscribeAll() {
-  [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
+  [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, tBattery, tDockStatus, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
+  dockStatus = null; showDock();
   stopDriving(); $('pad').classList.add('off'); setPill('pSonar', 'sonar ?', '');
   lockSeen = null; showLock();
 }
@@ -465,6 +488,16 @@ function draw() {
     plan.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
     ctx.stroke();
   }
+  if (dockStatus && dockStatus.dock) {
+    // The dock: a square where the robot sits, with an arrow the way it faces when docked.
+    const d = dockStatus.dock, [dx, dy] = toScreen(d.x, d.y), h = Math.max(8, 0.165 * px);
+    ctx.save(); ctx.translate(dx, dy); ctx.rotate(-d.yaw);
+    ctx.strokeStyle = css('--ok'); ctx.lineWidth = 2; ctx.setLineDash([4, 3]);
+    ctx.strokeRect(-h, -h, 2 * h, 2 * h); ctx.setLineDash([]);
+    ctx.fillStyle = css('--ok'); ctx.fillRect(-h - 4, -h, 4, 2 * h);     // the back wall
+    ctx.restore();
+    arrow(dx, dy, d.yaw, h * 1.4, css('--ok'), 2);
+  }
   if (goal) {
     const [gx, gy] = toScreen(goal.x, goal.y);
     ctx.fillStyle = css('--goal'); ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 2 * Math.PI); ctx.fill();
@@ -568,10 +601,38 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) stopD
 
 function onNear(m) { setPill('pSonar', m.data ? 'obstacle ahead' : 'sonar clear', m.data ? 'warn' : 'ok'); }
 
+// ------------------------------------------------------------ dock (robot_docking dock_manager)
+let dockStatus = null;            // last /dock/status JSON
+const DOCK_LOOK = { no_dock: ['', 'No dock saved'], idle: ['', 'Undocked'], docking: ['info', 'Docking…'],
+  docked: ['ok', 'Docked'], undocking: ['info', 'Undocking…'], failed: ['bad', 'Docking failed'] };
+function onDockStatus(m) { try { dockStatus = JSON.parse(m.data); } catch (e) { return; } showDock(); draw(); }
+function showDock() {
+  const s = dockStatus, st = s ? s.state : null;
+  const [cls, label] = s ? (DOCK_LOOK[st] || ['', st]) : ['', 'dock ?'];
+  $('kState').textContent = label; $('kDot').style.background = DOT[cls];
+  $('kMsg').textContent = s ? (s.message || '') : 'Needs robot_docking (web_nav.launch.py docking:=true).';
+  const busy = st === 'docking' || st === 'undocking';
+  $('btnDock').disabled = !s || !s.dock || busy || st === 'docked';
+  $('btnUndock').disabled = !s || !s.dock || busy;
+  $('btnDockSave').disabled = !s || busy;
+  $('btnDockCancel').disabled = !busy;
+  $('kAuto').disabled = !s; $('kAuto').checked = !!(s && s.auto);
+}
+function dockCmd(c) { if (connected) tDockCmd.publish(new ROSLIB.Message({ data: c })); else flash('Not connected.'); }
+$('btnDock').onclick = () => dockCmd('dock');
+$('btnUndock').onclick = () => dockCmd('undock');
+$('btnDockCancel').onclick = () => dockCmd('cancel');
+$('btnDockSave').onclick = () => {
+  if (confirm('Is the robot sitting in its dock right now, localized on the map? This pose becomes the dock.')) dockCmd('save');
+};
+$('kAuto').onchange = e => dockCmd(e.target.checked ? 'auto on' : 'auto off');
+showDock();
+
 // ------------------------------------------------------------ battery, sonars, lock
-const batt = { state: '', volts: NaN };
+const batt = { state: '', volts: NaN, pct: NaN };
 function showBattery() {
-  const v = isFinite(batt.volts) ? ` ${batt.volts.toFixed(1)} V` : '';
+  const v = (isFinite(batt.volts) ? ` ${batt.volts.toFixed(1)} V` : '') +
+            (batt.pct != null && isFinite(batt.pct) ? ` · ${Math.round(batt.pct * 100)} %` : '');
   const L = { ok: ['battery' + v, 'ok'], low: ['battery low' + v, 'warn'], critical: ['battery critical' + v, 'bad'] }[batt.state]
     || [v ? 'battery' + v : 'battery ?', ''];
   setPill('pBatt', L[0], L[1]);

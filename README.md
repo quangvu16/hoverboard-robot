@@ -199,7 +199,8 @@ If the upload doesn't start, hold **Boot**, tap **Reset**, then release **Boot**
 | `src/robot_bringup` | `robot_bringup.launch.py` (base + LiDAR + URDF + EKF + the [safety chain](#safety-chain-for-velocity-commands)), `robot_slam.launch.py`, EKF, collision monitor and `twist_mux` configs |
 | `src/robot_cartographer` | Cartographer + Nav2 + RViz in one launch, `save_map`, `initialpose_relay` |
 | `src/robot_navigation` | Nav2 parameters for this base (`param/hoverboard.yaml`, with the sonar range layer) |
-| `src/robot_web_nav` | Web page for driving and navigation over rosbridge |
+| `src/robot_web_nav` | Web page for driving, navigation and docking over rosbridge |
+| `src/robot_docking` | Auto-docking: dock saved on the map, Nav2 to the staging pose, reverse in; docks by itself when the battery is low |
 | `src/hoverboard_*` | Ports of the Yahboom packages: gamepad, laser behaviours, camera, multi-robot. See [`src/HOVERBOARD_PACKAGES.md`](src/HOVERBOARD_PACKAGES.md) |
 | `src/auto_mapper`, `src/m-explore-ros2`, `src/full_coverage_path_planner` | Vendored frontier explorers and a coverage planner |
 | `firmware/` | The ESP32 Arduino sketches for the ESP32 and the ESP32-S3 (not built by colcon), and [`PINOUT.md`](firmware/PINOUT.md) |
@@ -330,10 +331,40 @@ All three do the same things:
 | **Hold still / Release**: holds the robot against Nav2 and every stick, and greys the stick. The label shows the lock set by any client | `/cmd_vel_lock` (needs `ros-humble-twist-mux`) |
 | **Battery**: voltage; orange or red when the ESP32 is limiting speed (low) or holding the wheels (critical) | `/hoverboard/battery_state`, `/hoverboard/battery_volts` |
 | **Sonar distances**: front, left and right in metres; `clear` = nothing within 2 m | `/range/{front,left,right}` |
+| **Dock** (web page): Set dock here, Dock, Undock, Cancel, auto-dock on low battery; the dock is drawn on the map | `/dock/command`, `/dock/status` (robot_docking) |
 | **Navigation** (web page and app): click or tap a spot to go there, drag for the heading, set pose, cancel, saved spots | `/web/goal`, `/web/cancel`, `/initialpose`, `/web/nav_status` |
 
 Without the PC, the ESP32's own [drive page](#drive-from-a-phone-no-pc-needed) at
 `http://hoverboard.local/` drives the robot directly.
+
+## Docking
+
+`robot_docking` parks the robot in its dock and does it by itself when the battery runs low.
+`web_nav.launch.py` starts it (`docking:=true`, `auto_dock:=true`).
+
+1. Park the robot in the dock, localized on the map, and press **Set dock here**. The pose is
+   saved in `~/.ros/robot_dock.json`.
+2. **Dock**: Nav2 drives to a staging pose 0.7 m in front of the dock, facing away. Then the
+   dock manager reverses the robot in, steering on the TF pose, and stops 1 cm short.
+   Backwards keeps the front sonar reflex and the collision monitor pointed away from the dock.
+3. **Undock** drives forwards 0.7 m. **Auto-dock**: when the ESP32 reports battery `low`, the
+   robot docks, replacing any Nav2 goal.
+
+From a shell: `ros2 topic pub -1 /dock/command std_msgs/String "data: dock"` (also `save`,
+`undock`, `cancel`, `auto on`, `auto off`); status is on `/dock/status`. In simulation it docked
+within 1 cm along the dock axis, 0–1 cm off it and 1–4°. With no camera it's only as precise as
+the localization. Charging needs contacts on the dock wired to the charge port. See
+[`src/robot_docking/README.md`](src/robot_docking/README.md).
+
+The bridge also publishes a standard `sensor_msgs/BatteryState` on `/battery_state`, at 1 Hz:
+
+| Field | Value |
+|---|---|
+| `voltage` | the ESP32's filtered pack voltage |
+| `percentage` | rough, from a resting Li-ion curve per cell (3.3 V = 0 %, 4.15 V = 100 %); reads low while driving |
+| `power_supply_health` | `GOOD`, or `DEAD` at critical |
+| `cell_voltage` | the pack voltage divided across the 10 cells |
+| `current`, charging status | unknown: the mainboard measures the motors, not the pack |
 
 ## Start at boot
 
@@ -369,6 +400,10 @@ python3 ~/robot_ws/tools/calib_wheel_separation.py   # odom yaw vs Cartographer 
   - sonar marking and clearing in the costmap, and a 4-minute soak.
 - **Tested without the robot:** the drive sticks, battery, sonar and lock in the web
   page, the app and the project page, against a fake rosbridge.
+- **Tested without the robot:** docking, in a simulation with a fake ESP32 whose wheels follow
+  the commands, and real Nav2:
+  - save, undock, drive away, then dock (requested and on battery low) ended within 1–3 cm
+    of the dock and 4°.
 - **Tested without the robot:** the ESP32 drive page, low-battery protection and OTA. They
   compile for both boards and pass tests on the PC.
 - **To do:**

@@ -21,6 +21,9 @@ Arguments:
   rviz:=false       cartographer only; the page replaces RViz (amcl's launch
                     always opens RViz)
   ws_port:=9090  http_port:=8000
+  docking:=true|false  the dock manager (robot_docking): Set dock here / Dock /
+                    Undock on the page, auto-dock when the battery is low
+  auto_dock:=true|false
 """
 import os
 
@@ -30,6 +33,7 @@ from launch.actions import (DeclareLaunchArgument, ExecuteProcess, IncludeLaunch
                             LogInfo, OpaqueFunction)
 from launch.launch_description_sources import (AnyLaunchDescriptionSource,
                                                PythonLaunchDescriptionSource)
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -69,6 +73,8 @@ def generate_launch_description():
         DeclareLaunchArgument('rviz', default_value='false'),
         DeclareLaunchArgument('ws_port', default_value='9090'),
         DeclareLaunchArgument('http_port', default_value='8000'),
+        DeclareLaunchArgument('docking', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('auto_dock', default_value='true', choices=['true', 'false']),
 
         IncludeLaunchDescription(AnyLaunchDescriptionSource(rosbridge),
                                  launch_arguments={'port': LaunchConfiguration('ws_port')}.items()),
@@ -80,4 +86,9 @@ def generate_launch_description():
             output='log', name='web_page'),
         LogInfo(msg=['Web navigation page: http://<this-pc>:', LaunchConfiguration('http_port')]),
         OpaqueFunction(function=nav_stack),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory('robot_docking'), 'launch', 'docking.launch.py')),
+            launch_arguments={'auto_dock': LaunchConfiguration('auto_dock')}.items(),
+            condition=IfCondition(LaunchConfiguration('docking'))),
     ])

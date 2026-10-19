@@ -61,6 +61,10 @@ on). The amcl launch always opens RViz.
   the robot still against Nav2 and every stick, and greys the stick. The page re-sends it
   every 2 s while holding, and the label shows what the topic last carried, from any client.
   It needs `ros-humble-twist-mux` on the robot PC (robot_bringup `cmd_mux`).
+- **Dock** section: **Set dock here** (confirms first; the robot must be in its dock),
+  **Dock**, **Undock**, **Cancel**, and **Dock by itself when the battery is low**. The dock is
+  drawn on the map as a dashed square with its back wall. It needs `robot_docking`, which this
+  launch starts (`docking:=true`).
 - **Battery** pill (top): the ESP32's voltage and state from `/hoverboard/battery_state` and
   `/hoverboard/battery_volts`. It turns orange at low (the ESP32 halves the speed) and red at
   critical (the wheels are held until the pack is charged).
@@ -93,6 +97,9 @@ To drive, send this JSON over `ws://<robot-pc-ip>:9090` every 100 ms, and send z
 | `/web/cancel` | std_msgs/Empty | in | |
 | `/initialpose` | geometry_msgs/PoseWithCovarianceStamped | in | |
 | `/cmd_vel_lock` | std_msgs/Bool | in/out | twist_mux lock: true = hold still |
+| `/dock/command` | std_msgs/String | in | `save`, `dock`, `undock`, `cancel`, `auto on`, `auto off` |
+| `/dock/status` | std_msgs/String (JSON) | out | state, message, dock pose, auto, battery, percentage; latched |
+| `/battery_state` | sensor_msgs/BatteryState | out | voltage, rough percentage |
 | `/hoverboard/battery_state` | std_msgs/String | out | `ok` / `low` / `critical` / `unknown`, latched |
 | `/hoverboard/battery_volts` | std_msgs/Float32 | out | |
 | `/range/{front,left,right}` | sensor_msgs/Range | out | HC-SR04s; `max_range` (2 m) = no echo |

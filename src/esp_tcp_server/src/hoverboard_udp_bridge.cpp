@@ -80,6 +80,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sensor_msgs/msg/range.hpp>
+#include <sensor_msgs/msg/battery_state.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <std_msgs/msg/float32.hpp>
 #include <std_msgs/msg/int32.hpp>
@@ -243,6 +244,13 @@ public:
     // The ESP32's low-battery state, on change only; latched so a late
     // `ros2 topic echo` still shows it. "ok", "low" (speed limited by the
     // ESP32), "critical" (wheels stopped by the ESP32) or "unknown".
+    // The same as a standard sensor_msgs/BatteryState on battery_state (1 Hz),
+    // which Nav2's docking server and generic tools understand. Percentage is
+    // a rough resting Li-ion curve over the per-cell voltage, so it reads low
+    // while driving. current is unknown (NaN): the mainboard measures the
+    // motors, not the pack, so charging cannot be detected either.
+    battery_cells_ = declare_parameter<int>("battery_cells", 10);
+    pub_battery_ = create_publisher<sensor_msgs::msg::BatteryState>("battery_state", 10);
     pub_batt_state_ = create_publisher<std_msgs::msg::String>(
       "hoverboard/battery_state", rclcpp::QoS(1).transient_local());
     pub_joints_ = create_publisher<sensor_msgs::msg::JointState>("wheel_joint_states", 10);
@@ -576,6 +584,8 @@ private:
     const uint8_t st = b[74] & 3;
     const double vf = rd_u16(b + 76) / 100.0;
     battery_state_ = NAMES[st];
+    battery_filtered_ = vf;
+    if (b[75]) battery_cells_ = b[75];
     if (st == last_batt_state_) return;
     last_batt_state_ = st;
     std_msgs::msg::String m;
@@ -810,6 +820,42 @@ private:
       bv.data = (float)battery_volts_;
       pub_batt_->publish(bv);
     }
+    publish_battery_state(telem_up && mainboard_up_);
+  }
+
+  // Rough state of charge of one Li-ion cell at rest, linear between points.
+  static double cell_soc(double v) {
+    static const double V[] = {3.30, 3.45, 3.55, 3.65, 3.75, 3.85, 3.95, 4.05, 4.15};
+    static const double P[] = {0.00, 0.05, 0.12, 0.25, 0.42, 0.58, 0.74, 0.90, 1.00};
+    if (v <= V[0]) return 0.0;
+    for (int i = 1; i < 9; ++i)
+      if (v <= V[i]) return P[i - 1] + (P[i] - P[i - 1]) * (v - V[i - 1]) / (V[i] - V[i - 1]);
+    return 1.0;
+  }
+
+  void publish_battery_state(bool present) {
+    using BS = sensor_msgs::msg::BatteryState;
+    BS m;
+    m.header.stamp = now();
+    m.header.frame_id = base_frame_;
+    m.present = present;
+    // The ESP32's filtered voltage when the firmware sends it, else the raw one.
+    const double v = battery_filtered_ > 1.0 ? battery_filtered_ : battery_volts_;
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const int cells = std::max(1, battery_cells_);
+    m.voltage = present ? (float)v : (float)nan;
+    m.current = (float)nan;
+    m.charge = m.capacity = m.design_capacity = (float)nan;
+    m.temperature = (float)nan;
+    m.percentage = present ? (float)cell_soc(v / cells) : (float)nan;
+    m.power_supply_status = BS::POWER_SUPPLY_STATUS_UNKNOWN;
+    m.power_supply_health = battery_state_ == "critical" ? BS::POWER_SUPPLY_HEALTH_DEAD
+                          : (battery_state_ == "ok" || battery_state_ == "low") ? BS::POWER_SUPPLY_HEALTH_GOOD
+                          : BS::POWER_SUPPLY_HEALTH_UNKNOWN;
+    m.power_supply_technology = BS::POWER_SUPPLY_TECHNOLOGY_LION;
+    if (present) m.cell_voltage.assign(cells, (float)(v / cells));
+    m.location = "hoverboard";
+    pub_battery_->publish(m);
   }
 
   // --------------------------------------------------------------- members
@@ -870,6 +916,9 @@ private:
   uint32_t checksum_err_{0};
   double battery_volts_{0.0};
   std::string battery_state_;            // empty = firmware too old to say
+  double battery_filtered_{0.0};         // ESP32's filtered volts, 0 = not sent
+  int battery_cells_{10};
+  rclcpp::Publisher<sensor_msgs::msg::BatteryState>::SharedPtr pub_battery_;
   int last_batt_state_{-1};
   int last_state_{-1};
 

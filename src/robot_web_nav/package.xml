@@ -17,6 +17,7 @@
   <exec_depend>rosbridge_server</exec_depend>
   <exec_depend>robot_cartographer</exec_depend>
   <exec_depend>robot_navigation</exec_depend>
+  <exec_depend>robot_docking</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>
