@@ -20,6 +20,9 @@ remembered, and the app reconnects by itself every 2 s.
 | Max speed / Max turn | Caps for full stick: 0.05-0.5 m/s (default 0.2) and 0.2-2.0 rad/s (default 0.8). Remembered. |
 | **Stop** | Centres the stick and sends zeros. Leaving the app (home button, screen off) does the same. |
 | `sonar` pill | `/ultrasonic/obstacle_near`: `obstacle ahead` when the ESP32's front sonar reflex is blocking forward driving. |
+| Sonar line | Front / left / right distances in metres from `/range/{front,left,right}` (`clear` = no echo within 2 m). |
+| **Hold still** / **Release** | The `twist_mux` lock, `/cmd_vel_lock`. Hold still blocks every input, Nav2 and the sticks included, and greys the stick. The app re-sends it every 2 s while holding. Release is sent three times. The label shows what the topic last carried, from any client. Needs `ros-humble-twist-mux` on the robot PC: without it, the lock does nothing. |
+| `battery` pill | `/hoverboard/battery_state` and `/hoverboard/battery_volts`: the voltage, orange at `battery low` (the ESP32 halves the speed), red at `battery critical` (the ESP32 holds the wheels at zero until the pack is charged). |
 | Map | `/map` with the robot (`/web/robot_pose`), the planned path (`/plan`) and the goal. Pinch to zoom; two fingers pan. **Fit** and **Robot** re-centre. |
 | **Goal** mode | Tap where to go and drag to set the heading. With a plain tap, the robot faces the way it drove. Publishes `/web/goal`. |
 | **Set pose** mode | Tap where the robot really is and drag the way it faces. Publishes `/initialpose`. |

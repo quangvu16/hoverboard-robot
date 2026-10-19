@@ -258,10 +258,13 @@ public:
     pub_sonar_l_near_ = create_publisher<std_msgs::msg::Bool>("ultrasonic/left/obstacle_near", 10);
     pub_sonar_r_dist_ = create_publisher<std_msgs::msg::Int32>("ultrasonic/right/distance_mm", 10);
     pub_sonar_r_near_ = create_publisher<std_msgs::msg::Bool>("ultrasonic/right/obstacle_near", 10);
-    // Sensor-data QoS, which is what the range layer and collision monitor use.
-    pub_range_f_ = create_publisher<sensor_msgs::msg::Range>("range/front", rclcpp::SensorDataQoS());
-    pub_range_l_ = create_publisher<sensor_msgs::msg::Range>("range/left", rclcpp::SensorDataQoS());
-    pub_range_r_ = create_publisher<sensor_msgs::msg::Range>("range/right", rclcpp::SensorDataQoS());
+    // Reliable: matches the range layer and collision monitor (best-effort
+    // subscribers) and also rosbridge, which subscribes reliable when the app
+    // connects before this node exists. Cheap at 10 Hz.
+    const auto range_qos = rclcpp::QoS(rclcpp::KeepLast(5)).reliable();
+    pub_range_f_ = create_publisher<sensor_msgs::msg::Range>("range/front", range_qos);
+    pub_range_l_ = create_publisher<sensor_msgs::msg::Range>("range/left", range_qos);
+    pub_range_r_ = create_publisher<sensor_msgs::msg::Range>("range/right", range_qos);
     // The ESP32's indicator and stop LEDs as they are lit right now - the
     // indicators toggle with their blink, every 300 ms (LIGHT_BLINK_MS).
     pub_light_left_  = create_publisher<std_msgs::msg::Bool>("lights/left", 10);

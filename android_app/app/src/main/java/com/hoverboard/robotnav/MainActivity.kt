@@ -33,7 +33,9 @@ import kotlin.math.sin
  * Navigate the hoverboard robot through rosbridge (robot_web_nav on the PC):
  * same topics as the web page - /map, /plan, /web/robot_pose, /web/nav_status,
  * /ultrasonic/obstacle_near in; /web/goal, /web/cancel, /initialpose and
- * /cmd_vel_manual (the drive stick) out.
+ * /cmd_vel_manual (the drive stick) out. Plus the hoverboard bridge's
+ * /hoverboard/battery_{state,volts} and /range/{front,left,right} in, and the
+ * twist_mux lock /cmd_vel_lock both ways.
  */
 class MainActivity : Activity(), RosBridge.Listener {
 
@@ -61,6 +63,20 @@ class MainActivity : Activity(), RosBridge.Listener {
     private lateinit var stick: JoystickView
     private lateinit var pSonar: TextView
     private lateinit var dCmd: TextView
+    private lateinit var dSonar: TextView
+    private lateinit var dLock: TextView
+    private lateinit var pBatt: TextView
+
+    // Battery, from the ESP32 via the bridge (firmware battery.h).
+    private var battState = ""                 // "", ok, low, critical, unknown
+    private var battVolts = Double.NaN
+    // Sonars in metres; NaN = no reading yet, +inf = no echo.
+    private val sonar = doubleArrayOf(Double.NaN, Double.NaN, Double.NaN)
+    // twist_mux lock. lockSeen is what /cmd_vel_lock last carried (from anyone,
+    // this app included); null = nothing seen since connecting. While holding,
+    // the app re-sends true every LOCK_REPEAT_MS so other clients see it too.
+    private var lockSeen: Boolean? = null
+    private var holding = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,6 +96,10 @@ class MainActivity : Activity(), RosBridge.Listener {
         ros.subscribe("/web/nav_status", "std_msgs/msg/String")
         ros.subscribe("/plan", "nav_msgs/msg/Path", throttleMs = 500)
         ros.subscribe("/ultrasonic/obstacle_near", "std_msgs/msg/Bool", throttleMs = 200)
+        ros.subscribe("/hoverboard/battery_state", "std_msgs/msg/String")
+        ros.subscribe("/hoverboard/battery_volts", "std_msgs/msg/Float32", throttleMs = 1000)
+        for (side in SIDES) ros.subscribe("/range/$side", "sensor_msgs/msg/Range", throttleMs = 200)
+        ros.subscribe("/cmd_vel_lock", "std_msgs/msg/Bool")
         setupDrive()
 
         mapView.onPick = { mode, x, y, yaw -> onPick(mode, x, y, yaw) }
@@ -104,6 +124,7 @@ class MainActivity : Activity(), RosBridge.Listener {
         if (url == null) askAddress() else ros.connect(url)
         ui.post(ticker)
         ui.post(driveTicker)
+        ui.post(lockTicker)
     }
 
     // Leaving the app (home, another app, screen off) lets go of the stick and
@@ -117,6 +138,7 @@ class MainActivity : Activity(), RosBridge.Listener {
         super.onStop()
         ui.removeCallbacks(ticker)
         ui.removeCallbacks(driveTicker)
+        ui.removeCallbacks(lockTicker)
         ros.disconnect()
     }
 
@@ -154,6 +176,7 @@ class MainActivity : Activity(), RosBridge.Listener {
             RosBridge.State.CONNECTING -> pill(pConn, "connecting…", R.color.muted, R.color.sunk)
             RosBridge.State.DISCONNECTED -> {
                 pill(pSonar, "sonar ?", R.color.muted, R.color.sunk)
+                lockSeen = null; showLock()
                 pill(pConn, "no rosbridge", R.color.bad, R.color.bad_soft)
                 if (detail.isNotEmpty() && detail != "stopped") sMsg.text = "Connection: $detail"
             }
@@ -194,6 +217,26 @@ class MainActivity : Activity(), RosBridge.Listener {
             "/web/nav_status" -> {
                 val st = try { JSONObject(msg.getString("data")) } catch (e: Exception) { return }
                 ui.post { onStatus(st) }
+            }
+            "/hoverboard/battery_state" -> {
+                val s = msg.optString("data")
+                ui.post { battState = s; showBattery() }
+            }
+            "/hoverboard/battery_volts" -> {
+                val v = msg.optDouble("data", Double.NaN)
+                ui.post { battVolts = v; showBattery() }
+            }
+            "/range/front", "/range/left", "/range/right" -> {
+                val i = SIDES.indexOf(topic.substringAfterLast('/'))
+                val r = msg.optDouble("range", Double.NaN)
+                val max = msg.optDouble("max_range", Double.POSITIVE_INFINITY)
+                // The bridge sends exactly max_range for "no echo".
+                val m = if (r.isNaN() || r >= max - 1e-3) Double.POSITIVE_INFINITY else r
+                ui.post { sonar[i] = m; showSonar() }
+            }
+            "/cmd_vel_lock" -> {
+                val on = msg.optBoolean("data")
+                ui.post { lockSeen = on; showLock() }
             }
             "/ultrasonic/obstacle_near" -> {
                 val near = msg.optBoolean("data")
@@ -277,6 +320,12 @@ class MainActivity : Activity(), RosBridge.Listener {
             if (!was || (x == 0f && y == 0f)) driveNow()
         }
         findViewById<Button>(R.id.btnStop).setOnClickListener { stopDriving() }
+        dSonar = findViewById(R.id.dSonar)
+        dLock = findViewById(R.id.dLock)
+        pBatt = findViewById(R.id.pBatt)
+        findViewById<Button>(R.id.btnHold).setOnClickListener { setHold(true) }
+        findViewById<Button>(R.id.btnRelease).setOnClickListener { setHold(false) }
+        showLock()
 
         // Speed 0.05..0.5 m/s in 0.05 steps, turn 0.2..2.0 rad/s in 0.1 steps; remembered.
         val dV = findViewById<SeekBar>(R.id.dV); val dVo = findViewById<TextView>(R.id.dVo)
@@ -309,7 +358,8 @@ class MainActivity : Activity(), RosBridge.Listener {
 
     /** One drive step: publish what Drive says, cancel a goal when driving starts. */
     private fun driveNow() {
-        stick.isEnabled = ros.state == RosBridge.State.CONNECTED
+        // A held robot ignores the stick anyway (twist_mux); say so by greying it.
+        stick.isEnabled = ros.state == RosBridge.State.CONNECTED && lockSeen != true
         val (cmd, started) = drive.tick()
         if (started && (navState == "active" || navState == "sending")) {
             ros.publish("/web/cancel", "std_msgs/msg/Empty", JSONObject())
@@ -322,6 +372,54 @@ class MainActivity : Activity(), RosBridge.Listener {
         }
         val now = drive.command()
         dCmd.text = if (now.moving) String.format(Locale.US, "%.2f m/s · %.2f rad/s", now.vx, now.wz) else "stopped"
+    }
+
+    // ---------------------------------------------------------------- lock, battery, sonar
+    private fun publishLock(on: Boolean) =
+        ros.publish("/cmd_vel_lock", "std_msgs/msg/Bool", JSONObject().put("data", on))
+
+    /** Hold still (true) or release (false). Release is sent three times, 0.3 s apart. */
+    private fun setHold(on: Boolean) {
+        holding = on
+        if (on) stopDriving()
+        if (!publishLock(on)) { toast("Not connected"); return }
+        if (!on) for (k in 1..2) ui.postDelayed({ if (!holding) publishLock(false) }, 300L * k)
+    }
+
+    private val lockTicker = object : Runnable {
+        override fun run() {
+            if (holding) publishLock(true)
+            ui.postDelayed(this, LOCK_REPEAT_MS)
+        }
+    }
+
+    private fun showLock() {
+        if (!::dLock.isInitialized) return
+        dLock.text = when (lockSeen) {
+            true -> "lock: ON, robot held still"
+            false -> "lock: off"
+            null -> "lock: unknown (needs twist_mux)"
+        }
+        dLock.setTextColor(getColor(if (lockSeen == true) R.color.bad else R.color.muted))
+    }
+
+    private fun showBattery() {
+        val v = if (battVolts.isNaN()) "" else String.format(Locale.US, " %.1f V", battVolts)
+        when (battState) {
+            "low" -> pill(pBatt, "battery low$v", R.color.warn, R.color.warn_soft)
+            "critical" -> pill(pBatt, "battery critical$v", R.color.bad, R.color.bad_soft)
+            "ok" -> pill(pBatt, "battery$v", R.color.ok, R.color.ok_soft)
+            else -> pill(pBatt, if (v.isEmpty()) "battery ?" else "battery$v", R.color.muted, R.color.sunk)
+        }
+    }
+
+    private fun showSonar() {
+        fun f(m: Double) = when {
+            m.isNaN() -> "—"
+            m.isInfinite() -> "clear"
+            else -> String.format(Locale.US, "%.2f", m)
+        }
+        dSonar.text = "sonar  front ${f(sonar[0])}  left ${f(sonar[1])}  right ${f(sonar[2])}"
     }
 
     private fun stopDriving() {
@@ -487,4 +585,9 @@ class MainActivity : Activity(), RosBridge.Listener {
         return atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z))
     }
     private fun deg(r: Double) = "${Math.toDegrees(r).roundToInt()}°"
+
+    companion object {
+        private val SIDES = listOf("front", "left", "right")
+        private const val LOCK_REPEAT_MS = 2000L
+    }
 }

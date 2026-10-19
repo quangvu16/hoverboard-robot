@@ -63,6 +63,7 @@
             <TextView android:id="@+id/pStack" style="@style/Pill" android:text="stack ?" />
             <TextView android:id="@+id/pNav" style="@style/Pill" android:text="Nav2 ?" />
             <TextView android:id="@+id/pMap" style="@style/Pill" android:text="no map" />
+            <TextView android:id="@+id/pBatt" style="@style/Pill" android:text="battery ?" />
         </LinearLayout>
     </HorizontalScrollView>
 
@@ -190,6 +191,18 @@
                 android:textColor="@color/fg"
                 android:textSize="14sp" />
 
+            <!-- /range/{front,left,right} from the bridge -->
+            <TextView
+                android:id="@+id/dSonar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:fontFamily="monospace"
+                android:gravity="center_horizontal"
+                android:text="sonar  front —  left —  right —"
+                android:textColor="@color/muted"
+                android:textSize="13sp" />
+
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -264,6 +277,27 @@
                 android:textColor="#FFFFFF"
                 android:textSize="16sp"
                 android:textStyle="bold" />
+
+            <!-- twist_mux lock (/cmd_vel_lock): holds the robot still, sticks included -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/dLock"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="lock: unknown"
+                    android:textColor="@color/muted"
+                    android:textSize="14sp" />
+
+                <Button android:id="@+id/btnHold" style="@style/ToolButton" android:text="Hold still" />
+                <Button android:id="@+id/btnRelease" style="@style/ToolButton" android:layout_marginEnd="0dp" android:text="Release" />
+            </LinearLayout>
 
             <TextView style="@style/Section" android:text="NAVIGATION" />
 
