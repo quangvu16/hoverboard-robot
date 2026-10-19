@@ -11,6 +11,10 @@ docks itself to charge when the battery runs low.
 This repository is the PC-side colcon workspace (`~/robot_ws`). A full illustrated guide
 is in [`website/index.html`](website/index.html): open it in a browser.
 
+**How to run every feature, step by step:** [`RUNNING.md`](RUNNING.md). It covers setup,
+flashing, bringup, driving, mapping and Explore, navigation, patrol, docking, safety, boot
+and calibration.
+
 ## Video
 
 [![Hoverboard + ESP32 + LiDAR = navigation robot (YouTube)](https://img.youtube.com/vi/447QFAo13s0/hqdefault.jpg)](https://www.youtube.com/watch?v=447QFAo13s0)
@@ -239,6 +243,8 @@ Builds are plain `colcon build` (no `--symlink-install`), and config is read fro
 install space. After editing a YAML file, rebuild that package.
 
 ## Run
+
+The short version is below. [`RUNNING.md`](RUNNING.md) has every feature in detail.
 
 The PC and the ESP32 must be on the same network. If ufw is enabled:
 `sudo ufw allow 9900:9902/udp`.
