@@ -189,6 +189,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         <dt>x, y</dt><dd id="rXY">—</dd>
         <dt>Heading</dt><dd id="rYaw">—</dd>
         <dt>Pose age</dt><dd id="rAge">—</dd>
+        <dt>LiDAR</dt><dd id="rLidar">—</dd>
       </dl>
     </section>
     <section>
@@ -242,6 +243,7 @@ const tGoal = T('/web/goal', 'geometry_msgs/msg/PoseStamped');
 const tCancel = T('/web/cancel', 'std_msgs/msg/Empty');
 const tInit = T('/initialpose', 'geometry_msgs/msg/PoseWithCovarianceStamped');
 const tExplore = T('/web/explore', 'std_msgs/msg/String');   // "start" / "stop"
+const tLidar = T('/web/lidar', 'std_msgs/msg/String', { throttle_rate: 400, queue_length: 1 });   // web_nav_bridge summary of /scan
 const tPatrol = T('/web/patrol', 'std_msgs/msg/String');     // JSON spots / "stop"
 // Manual driving: same topic as rqt_robot_steering. The hoverboard bridge
 // stops the wheels by itself 0.5 s after the last command (cmd_timeout_s).
@@ -266,6 +268,7 @@ function subscribeAll() {
   tBattVolts.subscribe(m => { batt.volts = m.data; showBattery(); });
   tBattery.subscribe(m => { batt.pct = m.percentage; showBattery(); });
   tDockStatus.subscribe(onDockStatus);
+  tLidar.subscribe(onLidar);
   tRange.forEach((t, i) => t.subscribe(m => {
     // The bridge sends exactly max_range for "no echo".
     sonar[i] = m.range == null || m.range >= m.max_range - 1e-3 ? Infinity : m.range; showSonar();
@@ -277,7 +280,7 @@ function subscribeAll() {
   });
 }
 function unsubscribeAll() {
-  [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, tBattery, tDockStatus, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
+  [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, tBattery, tDockStatus, tLidar, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
   dockStatus = null; showDock();
   status = null; showExplorePatrol();
   stopDriving(); $('pad').classList.add('off'); setPill('pSonar', 'sonar ?', '');
@@ -535,6 +538,15 @@ function draw() {
     ctx.fillStyle = css('--goal'); ctx.beginPath(); ctx.arc(gx, gy, 6, 0, 2 * Math.PI); ctx.fill();
     arrow(gx, gy, goal.yaw, Math.max(22, 0.4 * px), css('--goal'), 3);
   }
+  if (robot && lidar && lidar.xy && lidar.age_s != null && lidar.age_s <= 2) {
+    // The live scan around the robot, rotated into the map with the robot's pose.
+    const c = Math.cos(robot.yaw), s = Math.sin(robot.yaw);
+    ctx.fillStyle = css('--bad');
+    for (const [x, y] of lidar.xy) {
+      const [sx, sy] = toScreen(robot.x + c * x - s * y, robot.y + s * x + c * y);
+      ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+    }
+  }
   if (robot) {
     const stale = performance.now() - robot.t > 2000;
     const [rx, ry] = toScreen(robot.x, robot.y), rad = Math.max(7, 0.18 * px);
@@ -631,6 +643,18 @@ function driveKey(e, down) {
 window.addEventListener('blur', stopDriving);
 document.addEventListener('visibilitychange', () => { if (document.hidden) stopDriving(); });
 
+// LiDAR: web_nav_bridge's /web/lidar (points already in the robot frame).
+let lidar = null;
+function onLidar(m) {
+  try { lidar = JSON.parse(m.data); } catch (e) { return; }
+  const el = $('rLidar');
+  if (lidar.age_s == null) el.textContent = 'no /scan yet';
+  else if (lidar.age_s > 2) el.textContent = `no scan for ${lidar.age_s.toFixed(0)} s`;
+  else el.textContent = `${lidar.hz.toFixed(1)} Hz · ${lidar.points} pts` +
+    (lidar.nearest_m != null ? ` · nearest ${lidar.nearest_m.toFixed(2)} m @ ${lidar.nearest_deg}°` : '');
+  el.style.color = lidar.age_s == null || lidar.age_s > 2 ? css('--bad') : '';
+  draw();
+}
 function onNear(m) { setPill('pSonar', m.data ? 'obstacle ahead' : 'sonar clear', m.data ? 'warn' : 'ok'); }
 
 // ------------------------------------------------------------ dock (robot_docking dock_manager)

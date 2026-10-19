@@ -16,6 +16,13 @@ awkward to use from a browser, so this node flattens them:
                                                    or "stop"; visits the spots in order, one
                                                    NavigateToPose goal each, from this node, so it
                                                    keeps going with the page closed
+  /web/lidar       std_msgs/String (JSON)     out  2 Hz, from /scan: {"hz", "points" (valid),
+                                                   "total", "nearest_m", "nearest_deg", "age_s",
+                                                   "frame", "xy": [[x, y], ...]} - up to
+                                                   lidar_max_points points in base_frame (m),
+                                                   so clients draw the scan without TF.
+                                                   nearest ignores returns inside the robot
+                                                   (lidar_self_radius). age_s null = no scan yet
   /web/nav_status  std_msgs/String (JSON)     out  on every change and at 2 Hz:
       {"state": "idle|sending|active|succeeded|aborted|canceled|rejected|unavailable",
        "stack": "...", "goal": {"x","y","yaw"} | null, "distance_remaining",
@@ -46,6 +53,7 @@ from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
 from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Bool, Empty, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
@@ -89,6 +97,16 @@ class WebNavBridge(Node):
         self.patrol_timer = None
         self.patrol_wait_until = None
         self.dock_state = ''
+
+        # LiDAR summary for the clients (/web/lidar).
+        self.lidar_max_points = int(self.declare_parameter('lidar_max_points', 180).value)
+        self.lidar_self_radius = float(self.declare_parameter('lidar_self_radius', 0.25).value)
+        self.lidar_pub = self.create_publisher(String, 'web/lidar', 10)
+        self.create_subscription(LaserScan, 'scan', self.on_scan, rclpy.qos.qos_profile_sensor_data)
+        self.scan = None
+        self.scan_times = []        # receive times of the last 2 s, for the rate
+        self.scan_tf = {}           # frame -> (x, y, yaw) in base_frame, cached (static)
+        self.create_timer(0.5, self.publish_lidar)
 
         self.goal_handle = None
         self.goal_seq = 0          # ignores callbacks from a goal that was replaced
@@ -357,6 +375,58 @@ class WebNavBridge(Node):
             if self.patrol is not None:
                 self.stop_patrol('Patrol stopped: the robot is docking.')
         self.dock_state = state
+
+    # ---------------------------------------------------------------- lidar
+    def on_scan(self, msg):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self.scan = msg
+        self.scan_times.append(now)
+        cut = now - 2.0
+        while self.scan_times and self.scan_times[0] < cut:
+            self.scan_times.pop(0)
+
+    def scan_pose(self, frame):
+        if frame not in self.scan_tf:
+            try:
+                t = self.tf_buffer.lookup_transform(self.base_frame, frame, Time())
+            except TransformException:
+                return None
+            tr = t.transform
+            self.scan_tf[frame] = (tr.translation.x, tr.translation.y, yaw_of(tr.rotation))
+        return self.scan_tf[frame]
+
+    def publish_lidar(self):
+        now = self.get_clock().now().nanoseconds * 1e-9
+        out = {'hz': 0.0, 'points': 0, 'total': 0, 'nearest_m': None, 'nearest_deg': None,
+               'age_s': None, 'frame': None, 'xy': []}
+        s = self.scan
+        if s is not None:
+            cut = now - 2.0
+            recent = [x for x in self.scan_times if x >= cut]
+            out['hz'] = round(len(recent) / 2.0, 1)
+            out['age_s'] = round(now - self.scan_times[-1], 1) if self.scan_times else None
+            out['frame'] = s.header.frame_id
+            out['total'] = len(s.ranges)
+            pose = self.scan_pose(s.header.frame_id)
+            if pose is not None:
+                ox, oy, oyaw = pose
+                pts = []
+                best = None
+                for i, r in enumerate(s.ranges):
+                    if not math.isfinite(r) or r < s.range_min or r > s.range_max:
+                        continue
+                    a = s.angle_min + i * s.angle_increment + oyaw
+                    x, y = ox + r * math.cos(a), oy + r * math.sin(a)
+                    pts.append((x, y))
+                    d = math.hypot(x, y)
+                    if d > self.lidar_self_radius and (best is None or d < best[0]):
+                        best = (d, math.degrees(math.atan2(y, x)))
+                out['points'] = len(pts)
+                if best:
+                    out['nearest_m'], out['nearest_deg'] = round(best[0], 2), round(best[1])
+                step = max(1, math.ceil(len(pts) / self.lidar_max_points))
+                out['xy'] = [[round(x, 2), round(y, 2)] for x, y in pts[::step]]
+        self.lidar_pub.publish(String(data=json.dumps(out, separators=(',', ':'))))
 
 
 def main():
