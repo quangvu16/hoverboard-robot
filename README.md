@@ -23,17 +23,18 @@ Watch the robot on YouTube: [Hoverboard + ESP32 + LiDAR = Navigation Robot](http
  ┌──────────────────┐ UART  ┌──────────────┐ LDS1 :9900 ┌─────────────────────────┐
  │ LD14P LiDAR      ├──────►│              ├───────────►│ udp_lidar_receiver_node │──► /scan
  ├──────────────────┤ UART  │              │ HBT1 :9902 ├─────────────────────────┤
- │ Hoverboard board │◄─────►│    ESP32     ├───────────►│ hoverboard_udp_bridge   │──► /odom, /imu/data,
- │ (FOC firmware)   │       │              │◄───────────┤                         │    /ultrasonic/*, /lights/*
- ├──────────────────┤ I²C   │ speed loop,  │ HBC1 :9901 └───────────┬─────────────┘◄── /cmd_vel
+ │ Hoverboard board │◄─────►│    ESP32     ├───────────►│ hoverboard_udp_bridge   │──► /odom, /imu/data, /range/*,
+ │ (FOC firmware)   │       │              │◄───────────┤                         │    /ultrasonic/*, /lights/*, battery
+ ├──────────────────┤ I²C   │ speed loop,  │ HBC1 :9901 └───────────┬─────────────┘◄── /cmd_vel_mux (safety chain below)
  │ MPU9250 IMU      ├──────►│ IMU fusion,  │                        ▼
- ├──────────────────┤ GPIO  │ sonar reflex │            robot_localization EKF ──► /odom/filtered
- │ 3× HC-SR04, LEDs │◄─────►│              │                        ▼
+ ├──────────────────┤ GPIO  │ sonar reflex,│            robot_localization EKF ──► /odom/filtered
+ │ 3× HC-SR04, LEDs │◄─────►│ battery stop │                        ▼
  └──────────────────┘       └──────────────┘            Cartographer / slam_toolbox + Nav2
 ```
 
 The work is split cleanly. Anything that must be on time, or keep working with Wi-Fi
-down, runs on the ESP32: the wheel speed loop, sonar reflexes, lights and IMU fusion.
+down, runs on the ESP32: the wheel speed loop, sonar reflexes, low-battery stop, lights and
+IMU fusion.
 Anything that needs real compute runs on the PC: maps, plans, costmaps and the EKF.
 The ESP32 only knows RPM and ticks. All geometry in metres lives in one file,
 `src/hoverboard_base_node/config/hoverboard_base.yaml`.
@@ -192,18 +193,18 @@ If the upload doesn't start, hold **Boot**, tap **Reset**, then release **Boot**
 
 | Path | What it is |
 |---|---|
-| `src/esp_tcp_server` | The translation layer: `hoverboard_udp_bridge_node`, `udp_lidar_receiver_node`, and the older TCP `esp_tcp_server_node` |
+| `src/esp_tcp_server` | The translation layer: `hoverboard_udp_bridge_node` (also the sonars as `/range/*` and the battery state), `udp_lidar_receiver_node`, and the older TCP `esp_tcp_server_node` |
 | `src/hoverboard_base_node` | `config/hoverboard_base.yaml`, the one place for wheel geometry and speed limits |
 | `src/hoverboard_description` | `hoverboard.urdf` (chassis, LiDAR, IMU, sonar frames) |
-| `src/robot_bringup` | `robot_bringup.launch.py` (base + LiDAR + URDF + EKF), `robot_slam.launch.py`, EKF config |
+| `src/robot_bringup` | `robot_bringup.launch.py` (base + LiDAR + URDF + EKF + the [safety chain](#safety-chain-for-velocity-commands)), `robot_slam.launch.py`, EKF, collision monitor and `twist_mux` configs |
 | `src/robot_cartographer` | Cartographer + Nav2 + RViz in one launch, `save_map`, `initialpose_relay` |
-| `src/robot_navigation` | Nav2 parameters for this base (`param/hoverboard.yaml`) |
-| `src/robot_web_nav` | Web page for navigation over rosbridge |
+| `src/robot_navigation` | Nav2 parameters for this base (`param/hoverboard.yaml`, with the sonar range layer) |
+| `src/robot_web_nav` | Web page for driving and navigation over rosbridge |
 | `src/hoverboard_*` | Ports of the Yahboom packages: gamepad, laser behaviours, camera, multi-robot. See [`src/HOVERBOARD_PACKAGES.md`](src/HOVERBOARD_PACKAGES.md) |
 | `src/auto_mapper`, `src/m-explore-ros2`, `src/full_coverage_path_planner` | Vendored frontier explorers and a coverage planner |
-| `firmware/` | The ESP32 Arduino sketches (not built by colcon) |
+| `firmware/` | The ESP32 Arduino sketches for the ESP32 and the ESP32-S3 (not built by colcon), and [`PINOUT.md`](firmware/PINOUT.md) |
 | `android_app/` | Robot Nav, a Kotlin Android app (see its [README](android_app/README.md)) |
-| `tools/` | Calibration scripts and the systemd autostart files |
+| `tools/` | Calibration scripts, the systemd autostart files and `ota_upload.sh` (firmware over Wi-Fi) |
 | `website/` | The project's web page |
 
 slam_toolbox is used from a separate workspace (`~/slam_toolbox_ws`, v2.6.9 retuned for
@@ -314,12 +315,25 @@ throw the chassis.
 ```bash
 ros2 launch robot_web_nav web_nav.launch.py stack:=cartographer map:=$HOME/m_map.pbstream
 ros2 launch robot_web_nav web_nav.launch.py stack:=amcl map:=$HOME/m_map.yaml
+ros2 launch robot_web_nav web_nav.launch.py stack:=none      # only drive by hand
 ```
 
-Open `http://<robot-pc-ip>:8000` on any device on the same Wi-Fi. Drive by hand with
-the on-screen joystick or `W` `A` `S` `D` (it publishes `/cmd_vel_manual` over the
-websocket; `stack:=none` if you only want to drive), or click a spot to send the robot there, drag to set its final heading, set its pose, cancel, or save named spots.
-The Android app in `android_app/` uses the same rosbridge websocket (`ws://<robot-pc-ip>:9090`) and has the same drive stick.
+Open `http://<robot-pc-ip>:8000` on any device on the same Wi-Fi. It needs
+`sudo apt install ros-humble-rosbridge-suite`. The Android app in `android_app/`
+(`~/RobotNav.apk`) uses the same rosbridge websocket (`ws://<robot-pc-ip>:9090`), and so does
+the drive panel on the project page ([`website/index.html`](website/index.html), chapter 09).
+All three do the same things:
+
+| Feature | Topics |
+|---|---|
+| **Drive stick** and `W` `A` `S` `D`: 10 commands a second while held, zeros on release; grabbing it cancels a Nav2 goal; leaving the page or app stops | `/cmd_vel_manual` (beats Nav2 in `twist_mux`) |
+| **Hold still / Release**: holds the robot against Nav2 and every stick, and greys the stick. The label shows the lock set by any client | `/cmd_vel_lock` (needs `ros-humble-twist-mux`) |
+| **Battery**: voltage; orange or red when the ESP32 is limiting speed (low) or holding the wheels (critical) | `/hoverboard/battery_state`, `/hoverboard/battery_volts` |
+| **Sonar distances**: front, left and right in metres; `clear` = nothing within 2 m | `/range/{front,left,right}` |
+| **Navigation** (web page and app): click or tap a spot to go there, drag for the heading, set pose, cancel, saved spots | `/web/goal`, `/web/cancel`, `/initialpose`, `/web/nav_status` |
+
+Without the PC, the ESP32's own [drive page](#drive-from-a-phone-no-pc-needed) at
+`http://hoverboard.local/` drives the robot directly.
 
 ## Start at boot
 
@@ -349,8 +363,21 @@ python3 ~/robot_ws/tools/calib_wheel_separation.py   # odom yaw vs Cartographer 
 - **Verified:** wheel radius (odometry read 0.61 m for a real 0.60 m); the ESP32 speed
   loop holds 30 rpm and drives 0.6 m straight at 0.2 m/s.
 - **Working:** bridge, LiDAR, MPU9250, EKF, and the Cartographer and Nav2 launch files.
+- **Tested without the robot:** the safety chain, with a fake ESP32 and a fake LiDAR on
+  an isolated ROS domain:
+  - the wheel RPMs for slow-down, stop, manual over Nav2, lock and silence;
+  - sonar marking and clearing in the costmap, and a 4-minute soak.
+- **Tested without the robot:** the drive sticks, battery, sonar and lock in the web
+  page, the app and the project page, against a fake rosbridge.
+- **Tested without the robot:** the ESP32 drive page, low-battery protection and OTA. They
+  compile for both boards and pass tests on the PC.
+- **To do:**
+  - flash the new firmware (`~/Arduino` still has the older sketch);
+  - `sudo apt install ros-humble-twist-mux ros-humble-rosbridge-suite`;
+  - `sudo apt upgrade` for tf2_ros 0.25.24 (see the [safety chain](#safety-chain-for-velocity-commands)).
 - **To do:** wheel separation (0.18 m) is unverified until the sensors are mounted on the
-  chassis. The web page and Android app are built but not yet tested against a live robot.
+  chassis. Then set the real sensor poses in `hoverboard.urdf` and re-check the collision
+  monitor zones.
 
 ## Learn more
 
