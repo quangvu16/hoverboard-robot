@@ -29,6 +29,7 @@
 //   battery.h      low-battery protection: limit speed, then stop
 //   web_drive.h    drive page + WebSocket server (no PC needed)
 //   web_page.h     the page itself
+//   ota.h          firmware updates over Wi-Fi (tools/ota_upload.sh)
 //
 // Task layout. Core 0: lidarTask (LiDAR UART) and hoverboardTask (mainboard
 // UART, sonar, IMU, hoverboard socket), the latter at higher priority - a late
@@ -37,10 +38,12 @@
 // scan send, since a WiFi send can stall for milliseconds; and webTask (the
 // drive page), which hands its commands to hoverboardTask through a mailbox.
 //
-// No third-party libraries: only the ESP32 core (WiFi, Wire, ESPmDNS, mbedtls).
+// No third-party libraries: only the ESP32 core (WiFi, Wire, ESPmDNS, mbedtls,
+// ArduinoOTA).
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 
 #include "config.h"
 #include "lidar_ld14.h"
@@ -62,15 +65,33 @@ static void wifiBegin() {
   wifi_retry_ms = millis();
 }
 
+// One mDNS name for everything this board serves: the drive page (http) and
+// OTA (the "arduino" service the Arduino IDE and espota look for).
+static void mdnsUp() {
+  if (!MDNS.begin(ROBOT_HOSTNAME)) {
+    Serial.println("mDNS failed; use the IP address instead of " ROBOT_HOSTNAME ".local");
+    return;
+  }
+#if WEB_DRIVE_ENABLED
+  MDNS.addService("http", "tcp", WEB_DRIVE_PORT);
+  Serial.printf("web: drive page on http://%s/ and http://%s.local/\n",
+                WiFi.localIP().toString().c_str(), ROBOT_HOSTNAME);
+#endif
+  if (otaEnabled()) MDNS.enableArduino(OTA_PORT, true);
+}
+
 static void wifiLoop() {
   const bool connected = (WiFi.status() == WL_CONNECTED);
 
   if (connected && !wifi_was_connected) {
     Serial.printf("WiFi up as %s\n", WiFi.localIP().toString().c_str());
     lidarOnWifiUp();
+    mdnsUp();
+    otaBegin();   // once; later reconnects keep the same listener
   } else if (!connected && wifi_was_connected) {
     Serial.println("WiFi lost, reconnecting");
     lidarOnWifiDown();
+    MDNS.end();
   }
   wifi_was_connected = connected;
 
@@ -105,6 +126,7 @@ void setup() {
 // ----------------------------------------------------------------------- loop
 void loop() {
   wifiLoop();
+  otaLoop();          // blocks here for the whole upload, then reboots
   sendPendingScan();
   delay(2);
 }

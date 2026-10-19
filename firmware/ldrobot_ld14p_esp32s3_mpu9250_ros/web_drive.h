@@ -16,7 +16,8 @@
 //
 // Minimal server, by design: one HTTP request or one WebSocket at a time, a
 // new WebSocket replaces the old one, text frames up to WS_MAX_FRAME bytes,
-// no fragmentation, no TLS. Anyone on the Wi-Fi can drive; set
+// no fragmentation, no TLS. During an OTA upload (ota.h) the wheels are held
+// at zero and the stick is ignored. Anyone on the Wi-Fi can drive; set
 // WEB_DRIVE_ENABLED 0 in config.h on a network you don't trust.
 //
 // Messages, page -> board (text):
@@ -33,7 +34,6 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
-#include <ESPmDNS.h>
 #include <esp_idf_version.h>
 #include "mbedtls/base64.h"
 #include "mbedtls/sha1.h"
@@ -251,7 +251,7 @@ static void webSendStatus() {
 
 static void webTask(void * arg) {
   (void)arg;
-  bool started = false, mdns = false;
+  bool started = false;
   uint32_t last_status_ms = 0;
   for (;;) {
     const bool up = WiFi.status() == WL_CONNECTED;
@@ -259,15 +259,7 @@ static void webTask(void * arg) {
       web_server.begin();
       started = true;
     }
-    if (up && !mdns) {
-      mdns = MDNS.begin(WEB_DRIVE_HOSTNAME);
-      if (mdns) MDNS.addService("http", "tcp", WEB_DRIVE_PORT);
-      Serial.printf("web: drive page on http://%s/ and http://%s.local/\n",
-                    WiFi.localIP().toString().c_str(), WEB_DRIVE_HOSTNAME);
-    } else if (!up && mdns) {
-      MDNS.end();
-      mdns = false;
-    }
+    // mDNS (hoverboard.local) is announced by the WiFi code in the .ino.
 
     if (started) {
       WiFiClient c = web_server.accept();

@@ -85,6 +85,7 @@ HardwareSerial HbSerial(2);
 Hoverboard     hoverboard;
 
 #include "battery.h"     // after hoverboard.h: low-battery protection
+#include "ota.h"         // ota_active / ota_robot_still
 #include "web_drive.h"   // after hoverboard.h: the drive page (web_drive.h)
 
 static const uint16_t HB_TELEM_LEN = 78;
@@ -253,6 +254,11 @@ static void hbReceiveCommands() {
 // that reverses by itself at power-on because something is near the sonar is
 // worse than one that simply refuses to go forward.
 static void hbApplyReflex() {
+  if (ota_active) {               // flashing: nothing moves until the reboot
+    hoverboard.setOutputRPM(0.0f, 0.0f);
+    sonarReflexIdle();
+    return;
+  }
   float l = hoverboard.getTargetRPM(HB_LEFT);
   float r = hoverboard.getTargetRPM(HB_RIGHT);
   if (l == 0.0f && r == 0.0f) {
@@ -341,6 +347,7 @@ static void hoverboardTask(void * arg) {
           fabsf(hoverboard.getWheelRPM(HB_LEFT)) < 1.0f &&
           fabsf(hoverboard.getWheelRPM(HB_RIGHT)) < 1.0f;
       imuRead(still);
+      ota_robot_still = still;    // OTA only answers while this holds
     }
 
     if (WiFi.status() == WL_CONNECTED) {
@@ -376,7 +383,7 @@ static void hoverboardTask(void * arg) {
     }
     // ROS's buzzer follows the wheels' rule (no commands, no noise); the
     // battery's chirps sound regardless.
-    hbSetBuzzer((hb_buzzer_ros && !hoverboard.isTimedOut()) || batteryBeep());
+    hbSetBuzzer(!ota_active && ((hb_buzzer_ros && !hoverboard.isTimedOut()) || batteryBeep()));
     hoverboard.transmit();
 
     const uint32_t now = millis();

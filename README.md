@@ -124,6 +124,35 @@ boot), and drive with the stick, the RPM sliders or `W` `A` `S` `D`.
   off. It is written with the ESP32 core only (WiFi, ESPmDNS, mbedtls), so the sketches
   still need no third-party libraries.
 
+### Firmware updates over Wi-Fi
+
+After one USB flash with a password, both MPU9250 sketches update over Wi-Fi (`ota.h`):
+
+```bash
+# once: add the password to the sketch's secrets.h, then flash over USB as above
+echo '#define OTA_PASSWORD "choose-a-long-password"' >> firmware/ldrobot_ld14p_esp32_mpu9250_ros/secrets.h
+
+# every update after that: build + upload over Wi-Fi
+tools/ota_upload.sh                                                   # WROOM sketch, hoverboard.local
+tools/ota_upload.sh firmware/ldrobot_ld14p_esp32s3_mpu9250_ros 192.168.1.50   # S3, by IP
+```
+
+- **No password, no OTA.** Without `OTA_PASSWORD` in `secrets.h`, OTA stays off,
+  because anyone on the Wi-Fi could otherwise reflash the robot. The script reads the
+  password from the same file, so the new image keeps OTA on.
+- **Only while standing still.** The board ignores update requests while the wheels are
+  commanded or turning; `espota` then reports *No response from the ESP*. Stop the robot
+  and run it again.
+- **Wheels held at zero** from the first byte until the reboot, whatever ROS, the web stick
+  or the sonar reflex asks. LiDAR scans pause for the 10-30 s of the upload.
+- **A bad image doesn't brick it.** The new firmware goes into the second app slot of the
+  default partition scheme (1.25 MB each; the sketch is about 0.85 MB). If it doesn't
+  boot, the old one does.
+- **Firewall.** The board connects back to the PC on TCP 38232 (`OTA_HOST_PORT`). With ufw
+  on, run `sudo ufw allow 38232/tcp`.
+- **Names.** `hoverboard.local` is announced over mDNS (`ROBOT_HOSTNAME` in `config.h`), the
+  same name as the drive page. If it doesn't resolve, use the IP the Serial Monitor prints.
+
 ### ESP32-S3-DevKitC-1 v1.1
 
 The S3 build follows Espressif's
