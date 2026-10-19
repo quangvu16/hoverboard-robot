@@ -411,6 +411,12 @@ kbd { font: .75em var(--mono); border: 1px solid var(--line); border-bottom-widt
 .drive-note { font-size: .82rem; color: var(--muted); margin: 0; }
 .drive-note kbd { font: .72rem var(--mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--bg); }
 .drive-msg { font-size: .85rem; color: var(--signal); margin: 0; min-height: 1.2em; }
+.drive-sonar { font: .85rem var(--mono); text-align: center; color: var(--muted); }
+.drive-lock { display: flex; align-items: center; gap: 6px; }
+.drive-lock span { flex: 1; font-size: .85rem; color: var(--muted); }
+.drive-lock span.on { color: var(--signal); font-weight: 600; }
+.drive-lock button { font: 500 .85rem var(--body); border: 0; border-radius: 100vw; padding: 8px 14px; cursor: pointer; background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1.5px var(--fg); }
+.drive-lock button:hover { background: var(--fg); color: var(--bg); }
 </style>
 </head>
 <body>
@@ -1309,6 +1315,7 @@ ros2 launch robot_bringup robot_bringup.launch.py collision_monitor:=false cmd_m
             <li><b>Let go and it stops:</b> a few zero commands go out, then nothing. The bridge stops the wheels by itself 0.5 s after the last command, so a closed tab or a dropped Wi-Fi link stops the robot too.</li>
             <li><b>Leave the page and it stops:</b> switching tab or window centres the stick at once.</li>
             <li><b>Nav2 is cancelled:</b> grabbing the stick during a goal cancels the goal, so the two don't fight over the wheels.</li>
+            <li><b>Hold still:</b> the button under Stop sets the <code>twist_mux</code> lock on <code>/cmd_vel_lock</code>, which holds the robot against Nav2 and every stick until Release. The panel also shows the ESP32's battery state and the three sonar distances.</li>
             <li><b>The sonar still wins:</b> the ESP32's front reflex backs the robot off below 350 mm, whatever you command. The <i>obstacle ahead</i> pill shows it.</li>
           </ul>
           <p>Lift the wheels off the ground the first time. The page must be opened from a file or over plain <code>http://</code>: browsers block <code>ws://</code> from <code>https://</code> pages.</p>
@@ -1320,15 +1327,20 @@ ros2 launch robot_bringup robot_bringup.launch.py collision_monitor:=false cmd_m
             <input id="dUrl" value="ws://192.168.1.12:9090" spellcheck="false" autocomplete="off" inputmode="url">
             <button type="submit" id="dBtn">Connect</button>
           </form>
-          <div class="drive-pills"><span class="pill info" id="dConn">offline</span><span class="pill info" id="dSonar">sonar ?</span><span class="pill info" id="dNav">nav ?</span></div>
+          <div class="drive-pills"><span class="pill info" id="dConn">offline</span><span class="pill info" id="dSonar">sonar ?</span><span class="pill info" id="dNav">nav ?</span><span class="pill info" id="dBatt">battery ?</span></div>
           <div class="dpad off" id="dPad" tabindex="0" role="application" aria-label="Drive stick: drag to drive, release to stop. With focus, W A S D or arrow keys drive and Space stops.">
             <span class="lab fw">fwd</span><span class="lab bk">back</span><span class="lab lf">left</span><span class="lab rt">right</span>
             <div class="dknob" id="dKnob"></div>
           </div>
           <div class="drive-cmd" id="dCmd">stopped</div>
+          <div class="drive-sonar" id="dRng">sonar F · L · R: —</div>
           <div class="dslider"><label for="dV">Max speed</label><input type="range" id="dV" min="0.05" max="0.5" step="0.05" value="0.2"><output id="dVo"></output></div>
           <div class="dslider"><label for="dW">Max turn</label><input type="range" id="dW" min="0.2" max="2" step="0.1" value="0.8"><output id="dWo"></output></div>
           <button class="drive-stop" type="button" id="dStop">Stop</button>
+          <div class="drive-lock" title="twist_mux lock on /cmd_vel_lock: holds the robot still, Nav2 and every stick included">
+            <span id="dLock">lock: unknown</span>
+            <button type="button" id="dHold">Hold still</button><button type="button" id="dRel">Release</button>
+          </div>
           <p class="drive-msg" id="dMsg" role="status"></p>
           <p class="drive-note">Click the stick first, then <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows drive and <kbd>Space</kbd> stops. The address is remembered in this browser.</p>
         </div>
@@ -1423,7 +1435,7 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
       <div class="android-intro">
         <div class="prose stack">
           <p><strong>Robot Nav</strong> is a native Android app written in Kotlin. It connects straight to rosbridge and uses the same topics as the web page, so nothing changes on the robot side: start <code>web_nav.launch.py</code> with either stack, and the app and browser can be used side by side.</p>
-          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. A drive stick under the map drives the robot by hand, with the same <a href="#drive">rules as the web stick</a>. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
+          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. A drive stick under the map drives the robot by hand, with the same <a href="#drive">rules as the web stick</a>. Next to it are the sonar distances, a battery label (low / critical from the ESP32) and Hold still / Release for the <code>twist_mux</code> lock. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
           <div class="spec">
             <span>package <b>com.hoverboard.robotnav</b></span>
             <span>Android <b>8.0+ (API 26)</b></span>
@@ -1579,6 +1591,7 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
         <div class="row"><span class="pill todo">To do</span><p>The IMU dropped out in the last session (calib status <code>none</code>), so check its wiring. Confirm the scan turns with the robot before tuning Nav2.</p></div>
         <div class="row"><span class="pill info">New</span><p>Web navigation (<code>robot_web_nav</code>) is built and its helper node is tested. It still needs <code>ros-humble-rosbridge-suite</code> installed and a live run on the robot.</p></div>
         <div class="row"><span class="pill info">New</span><p>The Robot Nav Android app (<code>~/RobotNav.apk</code>) is built. It still needs a run on a phone against a live rosbridge.</p></div>
+        <div class="row"><span class="pill info">New</span><p>The app, the <code>robot_web_nav</code> page and this site's drive panel all show the battery state and sonar distances and have Hold still / Release for the <code>twist_mux</code> lock. Tested against a mock rosbridge.</p></div>
         <div class="row"><span class="pill info">New</span><p>Safety chain (sonars in Nav2, collision monitor, <code>twist_mux</code>) tested with a fake ESP32 and LiDAR: slow, stop, manual-over-Nav2, lock, and a 4-minute costmap soak all passed. <code>twist_mux</code> still needs installing.</p></div>
         <div class="row"><span class="pill info">New</span><p>ESP32 drive page, low-battery protection and Wi-Fi updates compile for the ESP32 and the S3 and pass tests on the PC. They still need flashing to the board (<code>~/Arduino</code> has the older sketch).</p></div>
         <div class="row"><span class="pill todo">To do</span><p><code>sudo apt upgrade</code> on the robot PC for tf2_ros 0.25.24 (costmap deadlock, see Map &amp; navigate).</p></div>
@@ -1873,11 +1886,28 @@ document.querySelectorAll('.copy').forEach(function (btn) {
       send({ op: 'advertise', topic: '/web/cancel', type: 'std_msgs/msg/Empty' });
       send({ op: 'subscribe', topic: '/ultrasonic/obstacle_near', type: 'std_msgs/msg/Bool', throttle_rate: 200, queue_length: 1 });
       send({ op: 'subscribe', topic: '/web/nav_status', type: 'std_msgs/msg/String' });
+      send({ op: 'advertise', topic: '/cmd_vel_lock', type: 'std_msgs/msg/Bool' });
+      send({ op: 'subscribe', topic: '/cmd_vel_lock', type: 'std_msgs/msg/Bool' });
+      send({ op: 'subscribe', topic: '/hoverboard/battery_state', type: 'std_msgs/msg/String' });
+      send({ op: 'subscribe', topic: '/hoverboard/battery_volts', type: 'std_msgs/msg/Float32', throttle_rate: 1000, queue_length: 1 });
+      SIDES.forEach(function (s) { send({ op: 'subscribe', topic: '/range/' + s, type: 'sensor_msgs/msg/Range', throttle_rate: 200, queue_length: 1 }); });
     };
     sock.onmessage = function (ev) {
       var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
       if (m.op !== 'publish' || !m.msg) return;
       if (m.topic === '/ultrasonic/obstacle_near') pill('dSonar', m.msg.data ? 'obstacle ahead' : 'sonar clear', m.msg.data ? 'bad' : 'ok');
+      else if (m.topic === '/hoverboard/battery_state') { batt.state = m.msg.data; showBattery(); }
+      else if (m.topic === '/hoverboard/battery_volts') { batt.volts = m.msg.data; showBattery(); }
+      else if (m.topic.indexOf('/range/') === 0) {
+        var i = SIDES.indexOf(m.topic.slice(7)), r = m.msg.range;
+        // The bridge sends exactly max_range for "no echo".
+        if (i >= 0) { sonar[i] = (r == null || r >= m.msg.max_range - 1e-3) ? Infinity : r; showSonar(); }
+      }
+      else if (m.topic === '/cmd_vel_lock') {
+        var was = lockSeen; lockSeen = !!m.msg.data;
+        if (lockSeen && was !== true) stop();   // just locked: let go of the stick
+        showLock();
+      }
       else if (m.topic === '/web/nav_status') {
         try { navState = JSON.parse(m.msg.data).state || 'idle'; } catch (e) { return; }
         pill('dNav', 'nav ' + navState, navState === 'active' ? 'ok' : 'info');
@@ -1889,9 +1919,44 @@ document.querySelectorAll('.copy').forEach(function (btn) {
       release(); pad.classList.add('off');
       pill('dConn', wanted ? 'no rosbridge, retrying' : 'offline', wanted ? 'bad' : 'info');
       pill('dSonar', 'sonar ?', 'info'); pill('dNav', 'nav ?', 'info');
+      lockSeen = null; holding = false; showLock();
       if (wanted) retry = setTimeout(open, 2000);
     };
   }
+  // Battery, sonars and the twist_mux lock, as on the robot_web_nav page and in the app.
+  var SIDES = ['front', 'left', 'right'];
+  var batt = { state: '', volts: NaN }, sonar = [NaN, NaN, NaN];
+  var lockSeen = null, holding = false;   // lockSeen: last value on /cmd_vel_lock, from any client
+  function showBattery() {
+    var v = isFinite(batt.volts) ? ' ' + batt.volts.toFixed(1) + ' V' : '';
+    if (batt.state === 'low') pill('dBatt', 'battery low' + v, 'bad');
+    else if (batt.state === 'critical') pill('dBatt', 'battery critical' + v, 'bad');
+    else if (batt.state === 'ok') pill('dBatt', 'battery' + v, 'ok');
+    else pill('dBatt', v ? 'battery' + v : 'battery ?', 'info');
+  }
+  function showSonar() {
+    $('dRng').textContent = 'sonar F · L · R: ' + sonar.map(function (m) {
+      return isNaN(m) ? '—' : (m === Infinity ? 'clear' : m.toFixed(2));
+    }).join(' · ');
+  }
+  function showLock() {
+    var el = $('dLock');
+    el.textContent = lockSeen === true ? 'lock: ON, robot held still' : lockSeen === false ? 'lock: off' : 'lock: unknown (needs twist_mux)';
+    el.className = lockSeen === true ? 'on' : '';
+    pad.classList.toggle('off', !live || lockSeen === true);
+  }
+  function publishLock(on) { send({ op: 'publish', topic: '/cmd_vel_lock', msg: { data: on } }); }
+  $('dHold').addEventListener('click', function () {
+    if (!live) { say('Connect first.'); return; }
+    holding = true; stop(); publishLock(true);
+  });
+  $('dRel').addEventListener('click', function () {
+    if (!live) { say('Connect first.'); return; }
+    holding = false; publishLock(false);
+    [300, 600].forEach(function (ms) { setTimeout(function () { if (!holding) publishLock(false); }, ms); });
+  });
+  setInterval(function () { if (holding) publishLock(true); }, 2000);   // so other clients see it
+
   $('dForm').addEventListener('submit', function (e) {
     e.preventDefault();
     if (wanted) {                          // Disconnect
@@ -1950,7 +2015,7 @@ document.querySelectorAll('.copy').forEach(function (btn) {
     drive.x = x; drive.y = y;
   }
   pad.addEventListener('pointerdown', function (e) {
-    if (!live) return;
+    if (!live || lockSeen === true) return;
     e.preventDefault(); pad.focus({ preventScroll: true });
     try { pad.setPointerCapture(e.pointerId); } catch (err) {}
     drive.pointer = e.pointerId; pad.classList.add('on'); move(e); tick();
@@ -1967,7 +2032,7 @@ document.querySelectorAll('.copy').forEach(function (btn) {
     var dir = KEYMAP[e.key.toLowerCase()];
     if (!dir || (e.target.type === 'range' && e.key.indexOf('Arrow') === 0)) return;
     e.preventDefault();
-    if (live && !drive.keys[dir]) { drive.keys[dir] = true; tick(); }
+    if (live && lockSeen !== true && !drive.keys[dir]) { drive.keys[dir] = true; tick(); }
   });
   document.addEventListener('keyup', function (e) {
     var dir = KEYMAP[e.key.toLowerCase()];
