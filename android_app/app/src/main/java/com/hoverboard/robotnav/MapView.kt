@@ -3,6 +3,7 @@ package com.hoverboard.robotnav
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.DashPathEffect
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
@@ -41,6 +42,7 @@ class MapView @JvmOverloads constructor(context: Context, attrs: AttributeSet? =
     var robotStale = false
         set(v) { field = v; invalidate() }
     private var goal: Pose2D? = null
+    private var dock: Pose2D? = null       // robot pose when docked (robot_docking)
     private var plan = DoubleArray(0)
 
     private var scale = 0f
@@ -73,6 +75,7 @@ class MapView @JvmOverloads constructor(context: Context, attrs: AttributeSet? =
 
     fun setRobot(p: Pose2D) { robot = p; invalidate() }
     fun setGoal(p: Pose2D?) { goal = p; invalidate() }
+    fun setDock(p: Pose2D?) { dock = p; invalidate() }
     fun setPlan(xy: DoubleArray) { plan = xy; invalidate() }
     fun hasMap() = map != null
 
@@ -227,6 +230,22 @@ class MapView @JvmOverloads constructor(context: Context, attrs: AttributeSet? =
             }
             stroke.color = c(R.color.accent); stroke.strokeWidth = 3 * density
             canvas.drawPath(path, stroke)
+        }
+        dock?.let { d ->
+            // Where the robot sits when docked: dashed square, solid back wall, heading arrow.
+            val (dx, dy) = toScreen(d.x, d.y)
+            val h = max(8 * density, 0.165f * pxPerM)
+            val col = c(R.color.ok)
+            canvas.save()
+            canvas.rotate(-Math.toDegrees(d.yaw).toFloat(), dx, dy)
+            stroke.color = col; stroke.strokeWidth = 2 * density
+            stroke.pathEffect = DashPathEffect(floatArrayOf(5 * density, 4 * density), 0f)
+            canvas.drawRect(dx - h, dy - h, dx + h, dy + h, stroke)
+            stroke.pathEffect = null
+            fill.color = col
+            canvas.drawRect(dx - h - 4 * density, dy - h, dx - h, dy + h, fill)
+            canvas.restore()
+            arrow(canvas, dx, dy, d.yaw, h * 1.4f, col, 2 * density)
         }
         goal?.let { g ->
             val (gx, gy) = toScreen(g.x, g.y)

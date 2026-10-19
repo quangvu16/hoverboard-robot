@@ -299,6 +299,71 @@
                 <Button android:id="@+id/btnRelease" style="@style/ToolButton" android:layout_marginEnd="0dp" android:text="Release" />
             </LinearLayout>
 
+            <!-- robot_docking dock_manager: /dock/command, /dock/status -->
+            <TextView style="@style/Section" android:text="DOCK" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:id="@+id/kDot"
+                    android:layout_width="12dp"
+                    android:layout_height="12dp"
+                    android:background="@drawable/pill"
+                    android:backgroundTint="@color/muted" />
+
+                <TextView
+                    android:id="@+id/kState"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:layout_weight="1"
+                    android:text="dock ?"
+                    android:textColor="@color/fg"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/kMsg"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="Needs robot_docking (web_nav.launch.py docking:=true)."
+                android:textColor="@color/muted"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+                <Button android:id="@+id/btnDock" style="@style/ToolButton" android:layout_width="0dp" android:layout_weight="1" android:text="Dock" />
+                <Button android:id="@+id/btnUndock" style="@style/ToolButton" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="0dp" android:text="Undock" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+                <Button android:id="@+id/btnDockSave" style="@style/ToolButton" android:layout_width="0dp" android:layout_weight="1" android:text="Set dock here" />
+                <Button android:id="@+id/btnDockCancel" style="@style/ToolButton" android:layout_width="0dp" android:layout_weight="1" android:layout_marginEnd="0dp" android:text="Cancel" />
+            </LinearLayout>
+
+            <CheckBox
+                android:id="@+id/kAuto"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:buttonTint="@color/accent"
+                android:text="Dock by itself when the battery is low"
+                android:textColor="@color/muted"
+                android:textSize="14sp" />
+
             <TextView style="@style/Section" android:text="NAVIGATION" />
 
             <LinearLayout

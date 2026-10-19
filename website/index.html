@@ -417,6 +417,7 @@ kbd { font: .75em var(--mono); border: 1px solid var(--line); border-bottom-widt
 .drive-lock span.on { color: var(--signal); font-weight: 600; }
 .drive-lock button { font: 500 .85rem var(--body); border: 0; border-radius: 100vw; padding: 8px 14px; cursor: pointer; background: transparent; color: var(--fg); box-shadow: inset 0 0 0 1.5px var(--fg); }
 .drive-lock button:hover { background: var(--fg); color: var(--bg); }
+.drive-lock button:disabled { opacity: .4; cursor: default; background: transparent; color: var(--fg); }
 </style>
 </head>
 <body>
@@ -1239,6 +1240,38 @@ ros2 launch robot_bringup robot_bringup.launch.py collision_monitor:=false cmd_m
         <b class="t">Update tf2 on the robot PC</b>
         <p>Testing found a deadlock in <code>ros-humble-tf2-ros</code> 0.25.23 between Nav2's message filter and the TF listener: the local costmap then silently stops taking sensor data, LiDAR included, while Nav2 keeps driving. Run <code>sudo apt upgrade</code> (0.25.24 makes it much rarer). It's also why the sonars go into Nav2 as Range messages, which don't use that filter, and not as extra laser scans, which triggered it within minutes.</p>
       </div>
+      <div class="stack" id="docking">
+        <h3>Docking: back into the charger, by itself when the battery is low</h3>
+        <p><code>robot_docking</code> parks the robot in a dock saved on the map. The web page and the app start it with <code>web_nav.launch.py</code> (<code>docking:=true</code>).</p>
+        <div class="cmd"><div class="label">how it docks</div><pre>            dock (saved robot pose)          staging pose
+   wall ▐ [robot] ──────── 0.7 m ──────────► ●
+          ◄── 2. reverse in (dock_manager)   1. Nav2 drives here, facing away</pre></div>
+        <div class="grid3">
+          <div class="panel">
+            <h3>Set dock here</h3>
+            <p>Park the robot in the dock, localized on the map, and press <b>Set dock here</b> on the web page or in the app. The pose is saved in <code>~/.ros/robot_dock.json</code> and survives restarts.</p>
+          </div>
+          <div class="panel">
+            <h3>Dock and undock</h3>
+            <p>Nav2 drives to a point 0.7 m in front of the dock, facing away. The dock manager then reverses in, steering on the map pose, and stops 1 cm short. <b>Undock</b> drives 0.7 m back out.</p>
+          </div>
+          <div class="panel">
+            <h3>Auto-dock</h3>
+            <p>When the ESP32 reports battery <i>low</i> (speed already halved), the robot docks by itself and replaces any Nav2 goal. It doesn't wait for <i>critical</i>: the ESP32 holds the wheels at zero then.</p>
+          </div>
+        </div>
+        <ul>
+          <li><b>Why backwards:</b> the front sonar reverses the robot from anything nearer than 350 mm, and the collision monitor only watches the front. Backing in keeps both pointed away from the dock. A stick or <code>/cmd_vel_lock</code> still overrides the docking moves.</li>
+          <li><b>Tested in simulation:</b> a fake ESP32 whose wheels follow the commands, with real Nav2. Requested and battery-low docking ended within 1–3 cm and 1–4° of the dock.</li>
+          <li><b>Limits:</b> with no camera, the final position is only as good as the localization. The mainboard can't sense charging current, and charging needs contacts on the dock wired to the hoverboard's charge port.</li>
+          <li><b>Not Nav2's docking server:</b> its Humble release got backwards docking wrong in the same simulation (the robot turned round, or undocked into the wall), so a short reverse controller does the last 0.7 m. Details in <a href="https://github.com/quangvu16/hoverboard-robot/blob/main/src/robot_docking/README.md">robot_docking/README.md</a>.</li>
+        </ul>
+        <div class="cmd"><div class="label">shell<button class="copy" type="button">Copy</button></div><pre>ros2 topic pub -1 /dock/command std_msgs/String "data: save"     <span class="c"># the robot is in its dock now</span>
+ros2 topic pub -1 /dock/command std_msgs/String "data: dock"     <span class="c"># also undock, cancel, auto on, auto off</span>
+ros2 topic echo /dock/status                                     <span class="c"># JSON: state, message, dock pose, auto</span>
+ros2 topic echo /battery_state                                   <span class="c"># sensor_msgs/BatteryState: voltage, rough %</span></pre></div>
+      </div>
+
     </section>
 
     <!-- ===================== 09 WEB NAVIGATION ===================== -->
@@ -1346,6 +1379,10 @@ ros2 launch robot_bringup robot_bringup.launch.py collision_monitor:=false cmd_m
             <span id="dLock">lock: unknown</span>
             <button type="button" id="dHold">Hold still</button><button type="button" id="dRel">Release</button>
           </div>
+          <div class="drive-lock" title="robot_docking: dock at the dock saved on the map">
+            <span id="dDock">dock: ?</span>
+            <button type="button" id="dDockGo">Dock</button><button type="button" id="dUndock">Undock</button>
+          </div>
           <p class="drive-msg" id="dMsg" role="status"></p>
           <p class="drive-note">Click the stick first, then <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows drive and <kbd>Space</kbd> stops. The address is remembered in this browser.</p>
         </div>
@@ -1388,6 +1425,7 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
               <tr><td><b>Pan</b> (M), + / − / Fit / Robot</td><td>Move and zoom the map. The scroll wheel zooms around the cursor, and Robot centres the map on the robot.</td></tr>
               <tr><td><b>Drive</b> stick, <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd></td><td>Drives by hand on <code>/cmd_vel_manual</code>, which beats Nav2. Grabbing it cancels the active goal; letting go stops.</td></tr>
               <tr><td><b>Hold still</b> / <b>Release</b></td><td>The <code>twist_mux</code> lock: holds the robot against Nav2 and every stick, and greys the stick. The label shows the lock whoever set it.</td></tr>
+              <tr><td><b>Dock</b> section</td><td>Set dock here (asks first), Dock, Undock, Cancel, and auto-dock on low battery, through <a href="#docking"><code>robot_docking</code></a>. The dock is drawn on the map as a dashed square with its back wall.</td></tr>
               <tr><td>Battery pill, sonar line</td><td>The ESP32's battery state and voltage (orange when it limits speed, red when it holds the wheels) and the front, left and right sonar distances.</td></tr>
               <tr><td><b>Cancel goal</b></td><td>Stops the active goal.</td></tr>
               <tr><td><b>Saved spots</b></td><td>Name the robot's current position, then tap Go to send it back there. Spots are saved in that browser only.</td></tr>
@@ -1415,6 +1453,9 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
               <tr><td><code>/cmd_vel_lock</code></td><td><code>std_msgs/Bool</code></td><td>both</td><td>true = hold still (needs <code>twist_mux</code>)</td></tr>
               <tr><td><code>/hoverboard/battery_state</code>, <code>_volts</code></td><td><code>String</code>, <code>Float32</code></td><td>from robot</td><td><code>ok</code> / <code>low</code> / <code>critical</code>; the state is latched</td></tr>
               <tr><td><code>/range/{front,left,right}</code></td><td><code>sensor_msgs/Range</code></td><td>from robot</td><td class="num">10 Hz; 2 m = no echo</td></tr>
+              <tr><td><code>/dock/command</code></td><td><code>std_msgs/String</code></td><td>to robot</td><td><code>save</code>, <code>dock</code>, <code>undock</code>, <code>cancel</code>, <code>auto on|off</code></td></tr>
+              <tr><td><code>/dock/status</code></td><td><code>std_msgs/String</code> (JSON)</td><td>from robot</td><td>state, message, dock pose; latched</td></tr>
+              <tr><td><code>/battery_state</code></td><td><code>sensor_msgs/BatteryState</code></td><td>from robot</td><td class="num">1 Hz; voltage, rough %</td></tr>
             </tbody>
           </table>
         </div>
@@ -1447,7 +1488,7 @@ ros2 launch robot_web_nav web_nav.launch.py stack:=none</pre></div>
       <div class="android-intro">
         <div class="prose stack">
           <p><strong>Robot Nav</strong> is a native Android app written in Kotlin. It connects straight to rosbridge and uses the same topics as the web page, so nothing changes on the robot side: start <code>web_nav.launch.py</code> with either stack, and the app and browser can be used side by side.</p>
-          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. A drive stick under the map drives the robot by hand, with the same <a href="#drive">rules as the web stick</a>. Next to it are the sonar distances, a battery label (low / critical from the ESP32) and Hold still / Release for the <code>twist_mux</code> lock. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
+          <p>The app draws the map itself, so pinch-zoom and dragging a heading feel native. A drive stick under the map drives the robot by hand, with the same <a href="#drive">rules as the web stick</a>. Next to it are the sonar distances, a battery label (low / critical from the ESP32) and Hold still / Release for the <code>twist_mux</code> lock. A Dock section has Set dock here, Dock, Undock and auto-dock, and the dock is drawn on the map. The phone remembers the robot's address and your saved spots, and keeps the screen on while you navigate.</p>
           <div class="spec">
             <span>package <b>com.hoverboard.robotnav</b></span>
             <span>Android <b>8.0+ (API 26)</b></span>
@@ -1582,6 +1623,8 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
             <tr><td>Obstacles in RViz's local costmap stop updating; Nav2 drives as if nothing changed</td><td>tf2_ros 0.25.23 message-filter deadlock: the costmap no longer takes sensor data</td><td><code>sudo apt upgrade</code>, then restart Nav2</td></tr>
             <tr><td>Robot won't move at all, even by hand</td><td><code>/cmd_vel_lock</code> left at <code>true</code>, or the ESP32 says <code>battery critical</code></td><td>Publish <code>data: false</code> on <code>/cmd_vel_lock</code>; check <code>/hoverboard/battery_state</code> and charge</td></tr>
             <tr><td>Nav2 creeps or stops near walls</td><td>The collision monitor's slow (0.60 m) or stop (0.32 m) zone sees something</td><td>Watch <code>/polygon_slowdown</code>, <code>/polygon_stop</code> in RViz; tune <code>collision_monitor_hoverboard.yaml</code></td></tr>
+            <tr><td>Dock: <em>Nav2 is not running</em> or <em>could not reach the staging pose</em></td><td>No navigation stack, or the robot isn't localized on the map</td><td>Start web_nav with <code>stack:=cartographer</code> or <code>amcl</code>; set the pose first</td></tr>
+            <tr><td>Docks beside or short of the charger</td><td>Localization is off; there's no camera to correct the final approach</td><td>Re-localize, or press Set dock here again with the robot in the dock</td></tr>
             <tr><td><code>ota_upload.sh</code>: <em>No response from the ESP</em></td><td>The robot is moving, OTA has no password, or ufw blocks TCP 38232</td><td>Stop the robot; add <code>OTA_PASSWORD</code> and flash once over USB; <code>sudo ufw allow 38232/tcp</code></td></tr>
             <tr><td>Edited YAML has no effect</td><td>Config is read from the install space</td><td>Rebuild that package and re-source</td></tr>
             <tr><td>Phantom obstacle at 0.23 m</td><td>The robot's own body</td><td>Costmaps and Cartographer already ignore returns under 0.30 m</td></tr>
@@ -1604,6 +1647,7 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
         <div class="row"><span class="pill info">New</span><p>Web navigation (<code>robot_web_nav</code>) is built and its helper node is tested. It still needs <code>ros-humble-rosbridge-suite</code> installed and a live run on the robot.</p></div>
         <div class="row"><span class="pill info">New</span><p>The Robot Nav Android app (<code>~/RobotNav.apk</code>) is built. It still needs a run on a phone against a live rosbridge.</p></div>
         <div class="row"><span class="pill info">New</span><p>The app, the <code>robot_web_nav</code> page and this site's drive panel all show the battery state and sonar distances and have Hold still / Release for the <code>twist_mux</code> lock. Tested against a mock rosbridge.</p></div>
+        <div class="row"><span class="pill info">New</span><p>Docking (<code>robot_docking</code>) and <code>/battery_state</code>: tested in simulation with real Nav2, within 1–3 cm of the dock. Still needs a real dock, localization on the robot, and charging contacts.</p></div>
         <div class="row"><span class="pill info">New</span><p>Safety chain (sonars in Nav2, collision monitor, <code>twist_mux</code>) tested with a fake ESP32 and LiDAR: slow, stop, manual-over-Nav2, lock, and a 4-minute costmap soak all passed. <code>twist_mux</code> still needs installing.</p></div>
         <div class="row"><span class="pill info">New</span><p>ESP32 drive page, low-battery protection and Wi-Fi updates compile for the ESP32 and the S3 and pass tests on the PC. They still need flashing to the board (<code>~/Arduino</code> has the older sketch).</p></div>
         <div class="row"><span class="pill todo">To do</span><p><code>sudo apt upgrade</code> on the robot PC for tf2_ros 0.25.24 (costmap deadlock, see Map &amp; navigate).</p></div>
@@ -1618,7 +1662,7 @@ cp app/build/outputs/apk/release/app-release.apk ~/RobotNav.apk</pre></div>
           <div><time datetime="2026-10-07">07.10.26</time><p>IMU support added to firmware and bridge (HBT1 grows to 74 bytes); dead ST7789 display removed.</p></div>
           <div><time datetime="2026-10-11">11.10.26</time><p>MPU9250 firmware in use; EKF on by default; LiDAR+IMU-only Cartographer mode; direction swap tried and reverted; systemd autostart, web navigation and the Android app added.</p></div>
           <div><time datetime="2026-10-18">18.10.26</time><p>Drive sticks on the web page, the Android app and this site; ESP32-S3 port and pinout; the ESP32 serves its own drive page.</p></div>
-          <div><time datetime="2026-10-19">19.10.26</time><p>Low-battery protection and Wi-Fi updates in the firmware; sonars in Nav2, collision monitor and <code>twist_mux</code> command priorities; tf2 deadlock found and worked around.</p></div>
+          <div><time datetime="2026-10-19">19.10.26</time><p>Low-battery protection and Wi-Fi updates in the firmware; sonars in Nav2, collision monitor and <code>twist_mux</code> command priorities; tf2 deadlock found and worked around. Auto-docking and <code>sensor_msgs/BatteryState</code> added.</p></div>
         </div>
       </div>
     </section>
@@ -1899,6 +1943,9 @@ document.querySelectorAll('.copy').forEach(function (btn) {
       send({ op: 'subscribe', topic: '/ultrasonic/obstacle_near', type: 'std_msgs/msg/Bool', throttle_rate: 200, queue_length: 1 });
       send({ op: 'subscribe', topic: '/web/nav_status', type: 'std_msgs/msg/String' });
       send({ op: 'advertise', topic: '/cmd_vel_lock', type: 'std_msgs/msg/Bool' });
+      send({ op: 'advertise', topic: '/dock/command', type: 'std_msgs/msg/String' });
+      send({ op: 'subscribe', topic: '/dock/status', type: 'std_msgs/msg/String' });
+      send({ op: 'subscribe', topic: '/battery_state', type: 'sensor_msgs/msg/BatteryState', throttle_rate: 1000, queue_length: 1 });
       send({ op: 'subscribe', topic: '/cmd_vel_lock', type: 'std_msgs/msg/Bool' });
       send({ op: 'subscribe', topic: '/hoverboard/battery_state', type: 'std_msgs/msg/String' });
       send({ op: 'subscribe', topic: '/hoverboard/battery_volts', type: 'std_msgs/msg/Float32', throttle_rate: 1000, queue_length: 1 });
@@ -1909,6 +1956,8 @@ document.querySelectorAll('.copy').forEach(function (btn) {
       if (m.op !== 'publish' || !m.msg) return;
       if (m.topic === '/ultrasonic/obstacle_near') pill('dSonar', m.msg.data ? 'obstacle ahead' : 'sonar clear', m.msg.data ? 'bad' : 'ok');
       else if (m.topic === '/hoverboard/battery_state') { batt.state = m.msg.data; showBattery(); }
+      else if (m.topic === '/battery_state') { batt.pct = m.msg.percentage; showBattery(); }
+      else if (m.topic === '/dock/status') { try { dock = JSON.parse(m.msg.data); } catch (e) { return; } showDock(); }
       else if (m.topic === '/hoverboard/battery_volts') { batt.volts = m.msg.data; showBattery(); }
       else if (m.topic.indexOf('/range/') === 0) {
         var i = SIDES.indexOf(m.topic.slice(7)), r = m.msg.range;
@@ -1932,15 +1981,36 @@ document.querySelectorAll('.copy').forEach(function (btn) {
       pill('dConn', wanted ? 'no rosbridge, retrying' : 'offline', wanted ? 'bad' : 'info');
       pill('dSonar', 'sonar ?', 'info'); pill('dNav', 'nav ?', 'info');
       lockSeen = null; holding = false; showLock();
+      dock = null; showDock();
       if (wanted) retry = setTimeout(open, 2000);
     };
   }
   // Battery, sonars and the twist_mux lock, as on the robot_web_nav page and in the app.
   var SIDES = ['front', 'left', 'right'];
-  var batt = { state: '', volts: NaN }, sonar = [NaN, NaN, NaN];
+  var batt = { state: '', volts: NaN, pct: NaN }, sonar = [NaN, NaN, NaN];
+  var dock = null;   // last /dock/status (robot_docking)
+  var DOCK_LABEL = { no_dock: 'no dock saved', idle: 'undocked', docking: 'docking…', docked: 'docked',
+                     undocking: 'undocking…', failed: 'docking failed' };
+  function showDock() {
+    var st = dock ? dock.state : null, busy = st === 'docking' || st === 'undocking';
+    $('dDock').textContent = 'dock: ' + (dock ? (DOCK_LABEL[st] || st) : '? (needs robot_docking)');
+    $('dDock').className = st === 'failed' ? 'on' : '';
+    $('dDockGo').textContent = busy ? 'Cancel' : 'Dock';
+    $('dDockGo').disabled = !dock || (!dock.dock && !busy) || st === 'docked';
+    $('dUndock').disabled = !dock || !dock.dock || busy;
+    if (dock && dock.message) say(dock.message);
+  }
+  function dockCmd(c) { send({ op: 'publish', topic: '/dock/command', msg: { data: c } }); }
+  $('dDockGo').addEventListener('click', function () {
+    if (!live) { say('Connect first.'); return; }
+    dockCmd(dock && (dock.state === 'docking' || dock.state === 'undocking') ? 'cancel' : 'dock');
+  });
+  $('dUndock').addEventListener('click', function () { if (live) dockCmd('undock'); else say('Connect first.'); });
+  showDock();
   var lockSeen = null, holding = false;   // lockSeen: last value on /cmd_vel_lock, from any client
   function showBattery() {
-    var v = isFinite(batt.volts) ? ' ' + batt.volts.toFixed(1) + ' V' : '';
+    var v = (isFinite(batt.volts) ? ' ' + batt.volts.toFixed(1) + ' V' : '') +
+            (batt.pct != null && isFinite(batt.pct) ? ' · ' + Math.round(batt.pct * 100) + ' %' : '');
     if (batt.state === 'low') pill('dBatt', 'battery low' + v, 'bad');
     else if (batt.state === 'critical') pill('dBatt', 'battery critical' + v, 'bad');
     else if (batt.state === 'ok') pill('dBatt', 'battery' + v, 'ok');

@@ -15,6 +15,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.SeekBar
@@ -35,7 +36,8 @@ import kotlin.math.sin
  * /ultrasonic/obstacle_near in; /web/goal, /web/cancel, /initialpose and
  * /cmd_vel_manual (the drive stick) out. Plus the hoverboard bridge's
  * /hoverboard/battery_{state,volts} and /range/{front,left,right} in, and the
- * twist_mux lock /cmd_vel_lock both ways.
+ * twist_mux lock /cmd_vel_lock both ways; /battery_state (sensor_msgs/BatteryState)
+ * and the dock manager's /dock/status in, /dock/command out (robot_docking).
  */
 class MainActivity : Activity(), RosBridge.Listener {
 
@@ -70,6 +72,9 @@ class MainActivity : Activity(), RosBridge.Listener {
     // Battery, from the ESP32 via the bridge (firmware battery.h).
     private var battState = ""                 // "", ok, low, critical, unknown
     private var battVolts = Double.NaN
+    private var battPct = Double.NaN           // /battery_state percentage, 0..1
+    // Last /dock/status (robot_docking); null = no dock manager seen.
+    private var dockStatus: JSONObject? = null
     // Sonars in metres; NaN = no reading yet, +inf = no echo.
     private val sonar = doubleArrayOf(Double.NaN, Double.NaN, Double.NaN)
     // twist_mux lock. lockSeen is what /cmd_vel_lock last carried (from anyone,
@@ -100,6 +105,8 @@ class MainActivity : Activity(), RosBridge.Listener {
         ros.subscribe("/hoverboard/battery_volts", "std_msgs/msg/Float32", throttleMs = 1000)
         for (side in SIDES) ros.subscribe("/range/$side", "sensor_msgs/msg/Range", throttleMs = 200)
         ros.subscribe("/cmd_vel_lock", "std_msgs/msg/Bool")
+        ros.subscribe("/battery_state", "sensor_msgs/msg/BatteryState", throttleMs = 1000)
+        ros.subscribe("/dock/status", "std_msgs/msg/String")
         setupDrive()
 
         mapView.onPick = { mode, x, y, yaw -> onPick(mode, x, y, yaw) }
@@ -177,6 +184,7 @@ class MainActivity : Activity(), RosBridge.Listener {
             RosBridge.State.DISCONNECTED -> {
                 pill(pSonar, "sonar ?", R.color.muted, R.color.sunk)
                 lockSeen = null; showLock()
+                dockStatus = null; showDock()
                 pill(pConn, "no rosbridge", R.color.bad, R.color.bad_soft)
                 if (detail.isNotEmpty() && detail != "stopped") sMsg.text = "Connection: $detail"
             }
@@ -233,6 +241,14 @@ class MainActivity : Activity(), RosBridge.Listener {
                 // The bridge sends exactly max_range for "no echo".
                 val m = if (r.isNaN() || r >= max - 1e-3) Double.POSITIVE_INFINITY else r
                 ui.post { sonar[i] = m; showSonar() }
+            }
+            "/battery_state" -> {
+                val p = msg.optDouble("percentage", Double.NaN)
+                ui.post { battPct = p; showBattery() }
+            }
+            "/dock/status" -> {
+                val s = try { JSONObject(msg.getString("data")) } catch (e: Exception) { return }
+                ui.post { dockStatus = s; showDock() }
             }
             "/cmd_vel_lock" -> {
                 val on = msg.optBoolean("data")
@@ -325,6 +341,7 @@ class MainActivity : Activity(), RosBridge.Listener {
         pBatt = findViewById(R.id.pBatt)
         findViewById<Button>(R.id.btnHold).setOnClickListener { setHold(true) }
         findViewById<Button>(R.id.btnRelease).setOnClickListener { setHold(false) }
+        setupDock()
         showLock()
 
         // Speed 0.05..0.5 m/s in 0.05 steps, turn 0.2..2.0 rad/s in 0.1 steps; remembered.
@@ -404,13 +421,62 @@ class MainActivity : Activity(), RosBridge.Listener {
     }
 
     private fun showBattery() {
-        val v = if (battVolts.isNaN()) "" else String.format(Locale.US, " %.1f V", battVolts)
+        val v = (if (battVolts.isNaN()) "" else String.format(Locale.US, " %.1f V", battVolts)) +
+                (if (battPct.isNaN()) "" else " · ${(battPct * 100).roundToInt()} %")
         when (battState) {
             "low" -> pill(pBatt, "battery low$v", R.color.warn, R.color.warn_soft)
             "critical" -> pill(pBatt, "battery critical$v", R.color.bad, R.color.bad_soft)
             "ok" -> pill(pBatt, "battery$v", R.color.ok, R.color.ok_soft)
             else -> pill(pBatt, if (v.isEmpty()) "battery ?" else "battery$v", R.color.muted, R.color.sunk)
         }
+    }
+
+    // ---------------------------------------------------------------- dock (robot_docking)
+    private val dockLooks = mapOf(
+        "no_dock" to Pair("No dock saved", R.color.muted), "idle" to Pair("Undocked", R.color.muted),
+        "docking" to Pair("Docking…", R.color.accent), "docked" to Pair("Docked", R.color.ok),
+        "undocking" to Pair("Undocking…", R.color.accent), "failed" to Pair("Docking failed", R.color.bad),
+    )
+
+    private fun dockCmd(c: String) {
+        if (!ros.publish("/dock/command", "std_msgs/msg/String", JSONObject().put("data", c))) toast("Not connected")
+    }
+
+    private fun setupDock() {
+        findViewById<Button>(R.id.btnDock).setOnClickListener { dockCmd("dock") }
+        findViewById<Button>(R.id.btnUndock).setOnClickListener { dockCmd("undock") }
+        findViewById<Button>(R.id.btnDockCancel).setOnClickListener { dockCmd("cancel") }
+        findViewById<Button>(R.id.btnDockSave).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Set dock here?")
+                .setMessage("Is the robot sitting in its dock right now, localized on the map? This pose becomes the dock.")
+                .setPositiveButton("Set dock") { _, _ -> dockCmd("save") }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        findViewById<CheckBox>(R.id.kAuto).setOnClickListener { v ->
+            dockCmd(if ((v as CheckBox).isChecked) "auto on" else "auto off")
+        }
+        showDock()
+    }
+
+    private fun showDock() {
+        val s = dockStatus
+        val st = s?.optString("state")
+        val (label, color) = if (s == null) Pair("dock ?", R.color.muted) else dockLooks[st] ?: Pair(st ?: "?", R.color.muted)
+        findViewById<TextView>(R.id.kState).text = label
+        findViewById<View>(R.id.kDot).backgroundTintList = ColorStateList.valueOf(getColor(color))
+        findViewById<TextView>(R.id.kMsg).text =
+            s?.optString("message") ?: "Needs robot_docking (web_nav.launch.py docking:=true)."
+        val dock = s?.optJSONObject("dock")
+        val busy = st == "docking" || st == "undocking"
+        fun en(id: Int, on: Boolean) = findViewById<Button>(id).let { it.isEnabled = on; it.alpha = if (on) 1f else 0.4f }
+        en(R.id.btnDock, s != null && dock != null && !busy && st != "docked")
+        en(R.id.btnUndock, s != null && dock != null && !busy)
+        en(R.id.btnDockSave, s != null && !busy)
+        en(R.id.btnDockCancel, busy)
+        findViewById<CheckBox>(R.id.kAuto).apply { isEnabled = s != null; isChecked = s?.optBoolean("auto") == true }
+        mapView.setDock(dock?.let { MapView.Pose2D(it.getDouble("x"), it.getDouble("y"), it.getDouble("yaw")) })
     }
 
     private fun showSonar() {
