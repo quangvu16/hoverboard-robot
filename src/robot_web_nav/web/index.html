@@ -65,6 +65,13 @@ button.cancel:disabled { background: var(--sunk); color: var(--muted); cursor: d
 .row { display: flex; gap: 6px; }
 .row input { flex: 1; min-width: 0; font: 0.88rem var(--ui); padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
 .empty { font-size: 0.85rem; color: var(--muted); }
+.patrolrow { display: grid; grid-template-columns: auto 3.6em auto 3.6em 1fr; gap: 6px; align-items: center; margin-top: 10px; font-size: 0.82rem; color: var(--muted); }
+.patrolrow input { width: 100%; font: 0.85rem var(--mono); padding: 5px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.patrolrow button, .explorerow button { font: 600 0.85rem var(--ui); padding: 7px 10px; border-radius: 6px; border: 0; background: var(--accent); color: #fff; cursor: pointer; }
+.patrolrow button.stop, .explorerow button.stop { background: var(--bad); }
+.patrolrow button:disabled, .explorerow button:disabled { background: var(--sunk); color: var(--muted); cursor: default; }
+.explorerow { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.explorerow span { flex: 1; font-size: 0.85rem; color: var(--muted); }
 .pad { position: relative; width: min(220px, 70vw); aspect-ratio: 1; margin: 4px auto 10px; border-radius: 50%; background: var(--sunk); border: 1px solid var(--line); touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab; }
 .pad::before, .pad::after { content: ""; position: absolute; background: var(--line); }
 .pad::before { left: 50%; top: 12%; bottom: 12%; width: 1px; }
@@ -172,6 +179,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       </dl>
     </section>
     <button class="big cancel" id="btnCancel" disabled>Cancel goal</button>
+    <div class="explorerow" title="explore_lite: drive to the edges of the known map until nothing is unknown (mapping mode only)">
+      <span id="eState">explore: not available</span>
+      <button id="btnExplore" disabled>Explore</button>
+    </div>
     <section>
       <h2>Robot</h2>
       <dl>
@@ -186,6 +197,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <div class="row" style="margin-top:8px">
         <input id="spotName" placeholder="Name, e.g. kitchen" maxlength="30">
         <button id="spotSave" title="Save the robot's current position">Save here</button>
+      </div>
+      <div class="patrolrow" title="Visit the saved spots in order. Runs on the robot PC, so it keeps going with this page closed.">
+        <label for="pLoops">Loops</label><input id="pLoops" type="number" min="0" max="99" value="1" title="0 = until stopped">
+        <label for="pWait">Wait s</label><input id="pWait" type="number" min="0" max="600" value="5">
+        <button id="btnPatrol">Patrol</button>
       </div>
     </section>
     <section>
@@ -225,6 +241,8 @@ const tPlan = T('/plan', 'nav_msgs/msg/Path', { throttle_rate: 500, queue_length
 const tGoal = T('/web/goal', 'geometry_msgs/msg/PoseStamped');
 const tCancel = T('/web/cancel', 'std_msgs/msg/Empty');
 const tInit = T('/initialpose', 'geometry_msgs/msg/PoseWithCovarianceStamped');
+const tExplore = T('/web/explore', 'std_msgs/msg/String');   // "start" / "stop"
+const tPatrol = T('/web/patrol', 'std_msgs/msg/String');     // JSON spots / "stop"
 // Manual driving: same topic as rqt_robot_steering. The hoverboard bridge
 // stops the wheels by itself 0.5 s after the last command (cmd_timeout_s).
 const tDrive = T('/cmd_vel_manual', 'geometry_msgs/msg/Twist');
@@ -261,6 +279,7 @@ function subscribeAll() {
 function unsubscribeAll() {
   [tMap, tPose, tStatus, tPlan, tNear, tBattState, tBattVolts, tLock, tBattery, tDockStatus, ...tRange].forEach(t => { try { t.unsubscribe(); } catch (e) {} });
   dockStatus = null; showDock();
+  status = null; showExplorePatrol();
   stopDriving(); $('pad').classList.add('off'); setPill('pSonar', 'sonar ?', '');
   lockSeen = null; showLock();
 }
@@ -287,6 +306,7 @@ function resize() {
   cssW = r.width; cssH = r.height;
   cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (map && (!view || !view.s) && cssW) { fit(); return; }   // map arrived before the canvas had a size
   draw();
 }
 new ResizeObserver(resize).observe(cv);
@@ -368,7 +388,8 @@ function onStatus(m) {
   $('sEta').textContent = live && status.eta_s ? status.eta_s.toFixed(0) + ' s' : '—';
   $('sTime').textContent = live && status.nav_time_s != null ? status.nav_time_s.toFixed(0) + ' s' : '—';
   $('sRec').textContent = live && status.recoveries != null ? status.recoveries : '—';
-  $('btnCancel').disabled = !(status.state === 'active' || status.state === 'sending');
+  $('btnCancel').disabled = !(status.state === 'active' || status.state === 'sending' || status.patrol || status.explore === 'exploring');
+  showExplorePatrol();
   setPill('pStack', 'stack ' + status.stack, 'info');
   setPill('pNav', status.server_ready ? 'Nav2 ready' : 'Nav2 not running', status.server_ready ? 'ok' : 'bad');
   if (!['active', 'sending'].includes(status.state)) plan = [];
@@ -488,6 +509,17 @@ function draw() {
     plan.forEach(([x, y], i) => { const [sx, sy] = toScreen(x, y); i ? ctx.lineTo(sx, sy) : ctx.moveTo(sx, sy); });
     ctx.stroke();
   }
+  // Saved spots, numbered in patrol order; the patrol's next spot is filled.
+  const pat = status && status.patrol;
+  loadSpots().forEach((s, i) => {
+    const [sx, sy] = toScreen(s.x, s.y), next = pat && pat.index === i;
+    ctx.fillStyle = css('--goal'); ctx.strokeStyle = css('--goal'); ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 9, 0, 2 * Math.PI);
+    if (next) ctx.fill(); else ctx.stroke();
+    ctx.fillStyle = next ? '#fff' : css('--goal'); ctx.font = '600 11px ' + css('--ui');
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), sx, sy + 0.5);
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  });
   if (dockStatus && dockStatus.dock) {
     // The dock: a square where the robot sits, with an arrow the way it faces when docked.
     const d = dockStatus.dock, [dx, dy] = toScreen(d.x, d.y), h = Math.max(8, 0.165 * px);
@@ -682,7 +714,37 @@ function renderSpots() {
     del.onclick = () => { const a = loadSpots(); a.splice(i, 1); storeSpots(a); renderSpots(); };
     row.append(name, go, del); list.appendChild(row);
   });
+  draw();
+  if (typeof showExplorePatrol === 'function') showExplorePatrol();
 }
+
+// ------------------------------------------------------------ explore and patrol (web_nav_bridge)
+function showExplorePatrol() {
+  const ex = status ? status.explore : 'unavailable', pat = status && status.patrol;
+  const EX = { unavailable: 'explore: not running (mapping mode only)', paused: 'explore: ready',
+               exploring: 'exploring…', finished: 'explore: finished, save the map' };
+  $('eState').textContent = EX[ex] || 'explore: ' + ex;
+  const b = $('btnExplore');
+  b.disabled = !connected || ex === 'unavailable' || !ex;
+  b.textContent = ex === 'exploring' ? 'Stop exploring' : 'Explore';
+  b.className = ex === 'exploring' ? 'stop' : '';
+  const p = $('btnPatrol');
+  p.textContent = pat ? 'Stop patrol' : 'Patrol';
+  p.className = pat ? 'stop' : '';
+  p.disabled = !connected || (!pat && loadSpots().length < 1);
+}
+$('btnExplore').onclick = () => {
+  if (!connected) return;
+  tExplore.publish(new ROSLIB.Message({ data: status && status.explore === 'exploring' ? 'stop' : 'start' }));
+};
+$('btnPatrol').onclick = () => {
+  if (!connected) return;
+  if (status && status.patrol) { tPatrol.publish(new ROSLIB.Message({ data: 'stop' })); return; }
+  const spots = loadSpots();
+  if (!spots.length) { flash('Save at least one spot first.'); return; }
+  const loops = Math.max(0, parseInt($('pLoops').value, 10) || 0), wait = Math.max(0, parseFloat($('pWait').value) || 0);
+  tPatrol.publish(new ROSLIB.Message({ data: JSON.stringify({ spots, loops, wait_s: wait }) }));
+};
 $('spotSave').onclick = () => {
   if (!robot) { flash('No robot pose yet, so nothing to save.'); return; }
   const name = $('spotName').value.trim() || `Spot ${loadSpots().length + 1}`;
@@ -690,6 +752,7 @@ $('spotSave').onclick = () => {
   $('spotName').value = ''; renderSpots();
 };
 renderSpots();
+showExplorePatrol();
 connect();
 </script>
 </body>

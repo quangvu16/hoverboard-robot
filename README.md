@@ -334,9 +334,37 @@ All three do the same things:
 | **Sonar distances**: front, left and right in metres; `clear` = nothing within 2 m | `/range/{front,left,right}` |
 | **Dock**: web page and app have Set dock here (asks first), Dock, Undock, Cancel, auto-dock on low battery, and the dock drawn on the map; the project page panel has Dock / Undock (Cancel while busy) | `/dock/command`, `/dock/status` (robot_docking) |
 | **Navigation** (web page and app): click or tap a spot to go there, drag for the heading, set pose, cancel, saved spots | `/web/goal`, `/web/cancel`, `/initialpose`, `/web/nav_status` |
+| **Explore** (web page): while mapping, the robot drives to the edges of the known map until nothing is unknown, then returns; pause and resume | `/web/explore` → `explore_lite` |
+| **Patrol** (web page): visit the saved spots in order, N loops (or until stopped), waiting at each; runs on the PC, so it keeps going with the page closed | `/web/patrol` (`web_nav_bridge`) |
 
 Without the PC, the ESP32's own [drive page](#drive-from-a-phone-no-pc-needed) at
 `http://hoverboard.local/` drives the robot directly.
+
+## Explore and patrol
+
+On the web page:
+
+- **Explore.** Start mapping with `web_nav.launch.py stack:=cartographer` (no `map:=`) and
+  press **Explore**. `explore_lite` (vendored in `src/m-explore-ros2`) sends Nav2 to the edges
+  of the known map until no unknown space is left, then brings the robot back to where it
+  started. Then save the map: `ros2 run robot_cartographer save_map ~/m_map`. It starts paused
+  with the launch, so nothing moves until you press the button.
+- **Patrol.** Save some spots, set **Loops** (0 = until stopped) and **Wait s**, and press
+  **Patrol**. `web_nav_bridge` sends one Nav2 goal per spot, so the patrol runs on the PC and
+  keeps going with the page closed. An unreachable spot is retried once, then skipped.
+- **Who has Nav2.** A goal from the page, Cancel, a patrol or docking pauses exploring. A goal,
+  Cancel or docking ends a patrol. Battery-low auto-dock ends both.
+- **Tested in simulation** (fake ESP32, real Nav2):
+  - a 3-spot, 2-loop patrol finished;
+  - Cancel and docking stopped a patrol, and the robot then docked;
+  - Explore stayed still until pressed, then drove to a frontier;
+  - a page goal paused it and succeeded;
+  - Stop paused it.
+- **Changes to `explore_lite`** for this:
+  - a `start_paused` parameter;
+  - pausing cancels only its own goal (it used to cancel every Nav2 goal, the page's included);
+  - resume re-sends its goal;
+  - two crashes fixed: an uninitialised timer, and cancelling a goal that had already finished.
 
 ## Docking
 

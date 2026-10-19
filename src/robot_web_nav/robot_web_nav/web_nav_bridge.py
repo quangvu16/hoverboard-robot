@@ -9,10 +9,23 @@ awkward to use from a browser, so this node flattens them:
                                                    (a new goal replaces the old one)
   /web/cancel      std_msgs/Empty             in   cancel the active goal
   /web/robot_pose  geometry_msgs/PoseStamped  out  global_frame -> base_frame, pose_rate_hz
+  /web/explore     std_msgs/String            in   "start" / "stop": explore_lite on
+                                                   /explore/resume (it runs paused while mapping)
+  /web/patrol      std_msgs/String (JSON)     in   {"spots": [{"name","x","y","yaw"}, ...],
+                                                    "loops": n (0 = until stopped), "wait_s": s}
+                                                   or "stop"; visits the spots in order, one
+                                                   NavigateToPose goal each, from this node, so it
+                                                   keeps going with the page closed
   /web/nav_status  std_msgs/String (JSON)     out  on every change and at 2 Hz:
       {"state": "idle|sending|active|succeeded|aborted|canceled|rejected|unavailable",
        "stack": "...", "goal": {"x","y","yaw"} | null, "distance_remaining",
-       "eta_s", "nav_time_s", "recoveries", "message", "server_ready"}
+       "eta_s", "nav_time_s", "recoveries", "message", "server_ready",
+       "explore": "unavailable|paused|exploring|finished",
+       "patrol": null | {"index", "count", "name", "loop", "loops", "waiting_s"}}
+
+Who wins Nav2: the last to send a goal. So a goal from the page, Cancel, or a
+patrol pauses exploring; a goal or Cancel stops the patrol; and docking
+(robot_docking, /dock/status) stops the patrol and is never retried over.
 
 The initial pose needs no help: the page publishes /initialpose directly
 (AMCL reads it; Cartographer gets it through robot_cartographer's
@@ -29,9 +42,11 @@ from action_msgs.msg import GoalStatus
 from geometry_msgs.msg import PoseStamped
 from nav2_msgs.action import NavigateToPose
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.time import Time
-from std_msgs.msg import Empty, String
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from std_msgs.msg import Bool, Empty, String
 from tf2_ros import Buffer, TransformException, TransformListener
 
 FINAL_STATES = {
@@ -63,6 +78,17 @@ class WebNavBridge(Node):
         self.status_pub = self.create_publisher(String, 'web/nav_status', 10)
         self.create_subscription(PoseStamped, 'web/goal', self.on_goal, 10)
         self.create_subscription(Empty, 'web/cancel', self.on_cancel, 10)
+        self.create_subscription(String, 'web/explore', self.on_explore, 10)
+        self.create_subscription(String, 'web/patrol', self.on_patrol, 10)
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.explore_pub = self.create_publisher(Bool, 'explore/resume', 10)
+        self.create_subscription(Bool, 'explore/finished', self.on_explore_finished, latched)
+        self.create_subscription(String, 'dock/status', self.on_dock_status, latched)
+        self.explore = 'paused'      # what we last told explore_lite, or 'finished'
+        self.patrol = None           # {spots, loops, wait_s, index, loop, retried}
+        self.patrol_timer = None
+        self.patrol_wait_until = None
+        self.dock_state = ''
 
         self.goal_handle = None
         self.goal_seq = 0          # ignores callbacks from a goal that was replaced
@@ -109,10 +135,20 @@ class WebNavBridge(Node):
         out.update(self.feedback)
         out['stack'] = self.stack
         out['server_ready'] = self.nav.server_is_ready()
+        out['explore'] = self.explore if self.count_subscribers('explore/resume') > 0 else 'unavailable'
+        out['patrol'] = self.patrol_status()
+        if self.patrol is not None and not out.get('message'):
+            out['message'] = self.patrol_text()
         self.status_pub.publish(String(data=json.dumps(out)))
 
     # ---------------------------------------------------------------- goals
     def on_goal(self, msg):
+        # A goal from the page overrides exploring and any patrol.
+        self.pause_explore()
+        self.stop_patrol('')
+        self.send_nav(msg)
+
+    def send_nav(self, msg):
         if not msg.header.frame_id:
             msg.header.frame_id = self.global_frame
         p, q = msg.pose.position, msg.pose.orientation
@@ -160,14 +196,167 @@ class WebNavBridge(Node):
         state = FINAL_STATES.get(status, 'aborted')
         self.goal_handle = None
         self.get_logger().info(f'goal #{seq}: {state}')
-        self.set_state(state)
+        if state == 'aborted' and self.dock_state in ('docking', 'undocking'):
+            self.set_state('canceled', 'Replaced: the robot is docking')   # not a failure
+        else:
+            self.set_state(state)
+        if self.patrol is not None:
+            self.patrol_result(state)
 
     def on_cancel(self, _msg):
+        self.pause_explore()
+        self.stop_patrol('Patrol stopped.')
         if self.goal_handle is None:
             self.set_state('idle', 'nothing to cancel')
             return
         self.get_logger().info(f'cancel goal #{self.goal_seq}')
         self.goal_handle.cancel_goal_async()
+
+    # ---------------------------------------------------------------- explore
+    def on_explore(self, msg):
+        cmd = msg.data.strip().lower()
+        if cmd == 'start':
+            if self.count_subscribers('explore/resume') == 0:
+                self.set_state(self.status['state'], 'Explore is not running: launch web_nav with '
+                               'stack:=cartographer and no map:= (mapping mode)')
+                return
+            self.stop_patrol('')
+            if self.goal_handle is not None:
+                self.goal_handle.cancel_goal_async()
+            self.explore = 'exploring'
+            self.explore_pub.publish(Bool(data=True))
+            self.set_state(self.status['state'], 'Exploring: the robot maps the unknown areas by itself')
+        elif cmd == 'stop':
+            self.pause_explore()
+            self.set_state(self.status['state'], 'Exploring stopped')
+
+    def pause_explore(self):
+        if self.explore == 'exploring':
+            self.explore = 'paused'
+            self.explore_pub.publish(Bool(data=False))
+
+    def on_explore_finished(self, msg):
+        if msg.data and self.explore == 'exploring':
+            self.explore = 'finished'
+            self.set_state(self.status['state'], 'Exploring finished: no unknown areas left. Save the map.')
+
+    # ---------------------------------------------------------------- patrol
+    def on_patrol(self, msg):
+        if msg.data.strip().lower() == 'stop':
+            had = self.patrol is not None
+            self.stop_patrol('Patrol stopped.')
+            if had and self.goal_handle is not None:
+                self.goal_handle.cancel_goal_async()
+            return
+        try:
+            req = json.loads(msg.data)
+            spots = [{'name': str(s.get('name', f'spot {i + 1}')), 'x': float(s['x']),
+                      'y': float(s['y']), 'yaw': float(s.get('yaw', 0.0))}
+                     for i, s in enumerate(req['spots'])]
+        except (ValueError, KeyError, TypeError) as e:
+            self.set_state(self.status['state'], f'Bad patrol request: {e}')
+            return
+        if len(spots) < 1:
+            self.set_state(self.status['state'], 'A patrol needs at least one saved spot')
+            return
+        self.pause_explore()
+        self.stop_patrol('')
+        self.patrol = {'spots': spots, 'loops': max(0, int(req.get('loops', 1))),
+                       'wait_s': max(0.0, float(req.get('wait_s', 5.0))),
+                       'index': 0, 'loop': 1, 'retried': False}
+        self.get_logger().info(f'patrol: {len(spots)} spots, loops {self.patrol["loops"] or "forever"}, '
+                               f'wait {self.patrol["wait_s"]:.0f} s')
+        self.patrol_go()
+
+    def patrol_status(self):
+        p = self.patrol
+        if p is None:
+            return None
+        waiting = None
+        if self.patrol_wait_until is not None:
+            waiting = max(0.0, round((self.patrol_wait_until - self.get_clock().now()).nanoseconds * 1e-9, 1))
+        return {'index': p['index'], 'count': len(p['spots']), 'name': p['spots'][p['index']]['name'],
+                'loop': p['loop'], 'loops': p['loops'], 'waiting_s': waiting}
+
+    def patrol_go(self):
+        p = self.patrol
+        s = p['spots'][p['index']]
+        self.patrol_wait_until = None
+        msg = PoseStamped()
+        msg.header.frame_id = self.global_frame
+        msg.pose.position.x, msg.pose.position.y = s['x'], s['y']
+        msg.pose.orientation.z, msg.pose.orientation.w = math.sin(s['yaw'] / 2), math.cos(s['yaw'] / 2)
+        self.send_nav(msg)
+
+    def patrol_text(self):
+        p = self.patrol
+        s = p['spots'][p['index']]
+        where = (f'{s["name"]} ({p["index"] + 1}/{len(p["spots"])}, '
+                 f'loop {p["loop"]}{"/" + str(p["loops"]) if p["loops"] else ""})')
+        if self.patrol_wait_until is not None:
+            left = max(0.0, (self.patrol_wait_until - self.get_clock().now()).nanoseconds * 1e-9)
+            return f'Patrol: waiting {left:.0f} s, then {where}'
+        return f'Patrol: to {where}'
+
+    def patrol_result(self, state):
+        p = self.patrol
+        if self.dock_state in ('docking', 'undocking'):
+            self.stop_patrol('Patrol stopped: the robot is docking.')
+            return
+        if state == 'canceled':
+            self.stop_patrol('Patrol stopped.')
+            return
+        if state != 'succeeded':
+            if not p['retried']:              # one more try at the same spot
+                p['retried'] = True
+                self.start_patrol_timer(2.0)
+                return
+            self.get_logger().warn(f'patrol: {p["spots"][p["index"]]["name"]} unreachable, skipping')
+        p['retried'] = False
+        p['index'] += 1
+        if p['index'] >= len(p['spots']):
+            p['index'] = 0
+            p['loop'] += 1
+            if p['loops'] and p['loop'] > p['loops']:
+                self.stop_patrol(f'Patrol done: {p["loops"]} loop{"s" if p["loops"] > 1 else ""}.')
+                return
+        self.start_patrol_timer(p['wait_s'])
+
+    def start_patrol_timer(self, wait_s):
+        if self.patrol_timer is not None:
+            self.patrol_timer.cancel()
+        self.patrol_wait_until = self.get_clock().now() + Duration(seconds=wait_s)
+        self.patrol_timer = self.create_timer(max(0.05, wait_s), self.on_patrol_timer)
+        self.publish_status()
+
+    def on_patrol_timer(self):
+        self.patrol_timer.cancel()
+        self.patrol_timer = None
+        if self.patrol is not None:
+            self.patrol_go()
+
+    def stop_patrol(self, message):
+        if self.patrol_timer is not None:
+            self.patrol_timer.cancel()
+            self.patrol_timer = None
+        self.patrol_wait_until = None
+        if self.patrol is not None:
+            self.patrol = None
+            if message:
+                self.get_logger().info(message)
+                self.set_state(self.status['state'], message)
+
+    # ---------------------------------------------------------------- dock
+    def on_dock_status(self, msg):
+        try:
+            state = json.loads(msg.data).get('state', '')
+        except ValueError:
+            return
+        if state in ('docking', 'undocking') and self.dock_state not in ('docking', 'undocking'):
+            self.pause_explore()
+            if self.patrol is not None:
+                self.stop_patrol('Patrol stopped: the robot is docking.')
+        self.dock_state = state
 
 
 def main():

@@ -1,5 +1,13 @@
 ## This copy: adapted for the hoverboard robot
 
+* `start_paused` parameter (default false): wait for `/explore/resume true` before exploring
+  (robot_web_nav's Explore button); the return-to-start pose is taken when exploring starts.
+* Pausing cancels only explore's own goal, not every goal on `navigate_to_pose` (the page's
+  and the dock manager's goals were cancelled too); resume re-sends it and clears the blacklist.
+* Fixed: `last_progress_` was left default-constructed (different clock type, crash on the
+  first `now() - last_progress_`), and cancelling an already finished goal threw
+  `UnknownGoalHandleError`.
+
 Upstream: kaiaai/m-explore-ros2 (commit in `UPSTREAM_COMMIT`); only the `explore` package
 (`explore_lite`) is included. Changes:
 

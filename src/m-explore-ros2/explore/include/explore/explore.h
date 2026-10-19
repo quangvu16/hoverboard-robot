@@ -134,6 +134,9 @@ private:
 
   geometry_msgs::msg::Pose initial_pose_;
   void returnToInitialPose(void);
+  // hoverboard: robot pose to return to at the end; taken when exploring starts.
+  void captureInitialPose();
+  bool initial_pose_valid_ = false;
 
   // parameters
   double planner_frequency_;
@@ -143,6 +146,13 @@ private:
   bool return_to_init_;
   std::string robot_base_frame_;
   bool resuming_ = false;
+  // hoverboard: start_paused waits for /explore/resume true (the web page's
+  // Explore button); paused_ stops makePlan; the goal handle lets stop()
+  // cancel only explore's own goal, not the web page's or the dock's.
+  bool start_paused_ = false;
+  bool paused_ = false;
+  std::shared_future<NavigationGoalHandle::SharedPtr> goal_future_;
+  bool have_goal_ = false;
 };
 }  // namespace explore
 

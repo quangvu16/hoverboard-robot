@@ -69,6 +69,7 @@ Explore::Explore()
   this->declare_parameter<float>("gain_scale", 1.0);
   this->declare_parameter<float>("min_frontier_size", 0.5);
   this->declare_parameter<bool>("return_to_init", false);
+  this->declare_parameter<bool>("start_paused", false);
 
   this->get_parameter("planner_frequency", planner_frequency_);
   this->get_parameter("progress_timeout", timeout);
@@ -78,6 +79,7 @@ Explore::Explore()
   this->get_parameter("gain_scale", gain_scale_);
   this->get_parameter("min_frontier_size", min_frontier_size);
   this->get_parameter("return_to_init", return_to_init_);
+  this->get_parameter("start_paused", start_paused_);
   this->get_parameter("robot_base_frame", robot_base_frame_);
 
   progress_timeout_ = timeout;
@@ -109,7 +111,36 @@ Explore::Explore()
   move_base_client_->wait_for_action_server();
   RCLCPP_INFO(logger_, "Connected to move_base nav2 server");
 
-  if (return_to_init_) {
+  if (!start_paused_) {
+    captureInitialPose();
+  }
+
+  exploring_timer_ = this->create_wall_timer(
+      std::chrono::milliseconds((uint16_t)(1000.0 / planner_frequency_)),
+      [this]() { makePlan(); });
+  // hoverboard: start from a known state. last_progress_ was left
+  // default-constructed (another clock type: makePlan's now() - last_progress_
+  // threw), and prev_goal_ (0,0) could equal a first frontier's centroid.
+  last_progress_ = this->now();
+  prev_goal_.x = prev_goal_.y = 1e9;
+  prev_distance_ = 0.0;
+  if (start_paused_) {
+    // hoverboard: wait for the Explore button (/explore/resume true)
+    paused_ = true;
+    exploring_timer_->cancel();
+    RCLCPP_INFO(logger_, "Exploration paused until /explore/resume true.");
+    return;
+  }
+  // Start exploration right away
+  makePlan();
+}
+
+void Explore::captureInitialPose()
+{
+  if (!return_to_init_) {
+    return;
+  }
+  {
     RCLCPP_INFO(logger_, "Getting initial pose of the robot");
     geometry_msgs::msg::TransformStamped transformStamped;
     std::string map_frame = costmap_client_.getGlobalFrameID();
@@ -122,15 +153,12 @@ Explore::Explore()
     } catch (tf2::TransformException& ex) {
       RCLCPP_ERROR(logger_, "Couldn't find transform from %s to %s: %s",
                    map_frame.c_str(), robot_base_frame_.c_str(), ex.what());
-      return_to_init_ = false;
+      initial_pose_valid_ = false;
+      return;
     }
   }
 
-  exploring_timer_ = this->create_wall_timer(
-      std::chrono::milliseconds((uint16_t)(1000.0 / planner_frequency_)),
-      [this]() { makePlan(); });
-  // Start exploration right away
-  makePlan();
+  initial_pose_valid_ = true;
 }
 
 Explore::~Explore()
@@ -241,6 +269,9 @@ void Explore::visualizeFrontiers(
 
 void Explore::makePlan()
 {
+  if (paused_) {
+    return;
+  }
   // find frontiers
   auto pose = costmap_client_.getRobotPose();
   // get frontiers sorted according to cost
@@ -322,7 +353,8 @@ void Explore::makePlan()
        target_position](const NavigationGoalHandle::WrappedResult& result) {
         reachedGoal(result, target_position);
       };
-  move_base_client_->async_send_goal(goal, send_goal_options);
+  goal_future_ = move_base_client_->async_send_goal(goal, send_goal_options);
+  have_goal_ = true;
 }
 
 void Explore::returnToInitialPose()
@@ -399,7 +431,24 @@ void Explore::start()
 void Explore::stop(bool finished_exploring)
 {
   RCLCPP_INFO(logger_, "Exploration stopped.");
-  move_base_client_->async_cancel_all_goals();
+  // hoverboard: cancel only our own goal (cancel_all would also cancel a goal
+  // the web page or the dock manager just sent), and forget it so a resume
+  // sends it again.
+  paused_ = true;
+  if (have_goal_ && goal_future_.valid() &&
+      goal_future_.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+    auto handle = goal_future_.get();
+    if (handle) {
+      try {
+        move_base_client_->async_cancel_goal(handle);
+      } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {
+        // the goal already finished: nothing to cancel
+      }
+    }
+  }
+  have_goal_ = false;
+  prev_goal_ = geometry_msgs::msg::Point();
+  prev_goal_.x = prev_goal_.y = 1e9;
   exploring_timer_->cancel();
 
   if (finished_exploring) {
@@ -407,7 +456,7 @@ void Explore::stop(bool finished_exploring)
     done.data = true;
     finished_publisher_->publish(done);
   }
-  if (return_to_init_ && finished_exploring) {
+  if (return_to_init_ && initial_pose_valid_ && finished_exploring) {
     returnToInitialPose();
   }
 }
@@ -415,6 +464,16 @@ void Explore::stop(bool finished_exploring)
 void Explore::resume()
 {
   resuming_ = true;
+  paused_ = false;
+  if (!initial_pose_valid_) {
+    captureInitialPose();   // hoverboard: home = where exploring started
+  }
+  std_msgs::msg::Bool done;   // a new round of exploring is not finished
+  done.data = false;
+  finished_publisher_->publish(done);
+  frontier_blacklist_.clear();
+  last_progress_ = this->now();
+  prev_goal_.x = prev_goal_.y = 1e9;
   RCLCPP_INFO(logger_, "Exploration resuming.");
   // Reactivate the timer
   exploring_timer_->reset();

@@ -61,6 +61,17 @@ on). The amcl launch always opens RViz.
   the robot still against Nav2 and every stick, and greys the stick. The page re-sends it
   every 2 s while holding, and the label shows what the topic last carried, from any client.
   It needs `ros-humble-twist-mux` on the robot PC (robot_bringup `cmd_mux`).
+- **Explore** (Navigation section): while mapping (`stack:=cartographer` with no `map:=`),
+  `explore_lite` starts paused with the launch. Explore drives the robot to the edges of the
+  known map until nothing is unknown, then returns to where it started. When it says
+  *finished*, save the map (`ros2 run robot_cartographer save_map ~/m_map`). Stop exploring
+  pauses it. A goal from the page, Cancel, a patrol or docking also pauses it, so they never
+  fight over Nav2.
+- **Patrol** (Saved spots): visits the saved spots in order, with **Loops** (0 = until stopped)
+  and **Wait s** at each spot. It runs in `web_nav_bridge` on the robot PC, so it keeps going
+  with the page closed. An unreachable spot gets one retry, then it's skipped. A goal from the
+  page, Cancel, Stop patrol or docking ends it. The spots are numbered on the map, and the
+  next one is filled.
 - **Dock** section: **Set dock here** (confirms first; the robot must be in its dock),
   **Dock**, **Undock**, **Cancel**, and **Dock by itself when the battery is low**. The dock is
   drawn on the map as a dashed square with its back wall. It needs `robot_docking`, which this
@@ -97,6 +108,8 @@ To drive, send this JSON over `ws://<robot-pc-ip>:9090` every 100 ms, and send z
 | `/web/cancel` | std_msgs/Empty | in | |
 | `/initialpose` | geometry_msgs/PoseWithCovarianceStamped | in | |
 | `/cmd_vel_lock` | std_msgs/Bool | in/out | twist_mux lock: true = hold still |
+| `/web/explore` | std_msgs/String | in | `start` / `stop` (explore_lite on `/explore/resume`) |
+| `/web/patrol` | std_msgs/String | in | JSON `{"spots": [{"name","x","y","yaw"}], "loops": n, "wait_s": s}` or `stop` |
 | `/dock/command` | std_msgs/String | in | `save`, `dock`, `undock`, `cancel`, `auto on`, `auto off` |
 | `/dock/status` | std_msgs/String (JSON) | out | state, message, dock pose, auto, battery, percentage; latched |
 | `/battery_state` | sensor_msgs/BatteryState | out | voltage, rough percentage |
@@ -106,7 +119,7 @@ To drive, send this JSON over `ws://<robot-pc-ip>:9090` every 100 ms, and send z
 | `/cmd_vel_manual` | geometry_msgs/Twist | in | manual driving: `linear.x` m/s, `angular.z` rad/s. Resend at least every 0.5 s |
 | `/ultrasonic/obstacle_near` | std_msgs/Bool | out | front sonar is blocking |
 | `/web/robot_pose` | geometry_msgs/PoseStamped | out | 5 Hz |
-| `/web/nav_status` | std_msgs/String (JSON) | out | state, goal, distance_remaining, eta_s, nav_time_s, recoveries, stack, server_ready |
+| `/web/nav_status` | std_msgs/String (JSON) | out | state, goal, distance_remaining, eta_s, nav_time_s, recoveries, stack, server_ready, explore (unavailable/paused/exploring/finished), patrol (index, count, name, loop, loops, waiting_s) |
 | `/map`, `/plan` | OccupancyGrid, Path | out | straight from the stack |
 
 `web/roslib.min.js` is roslib 1.4.1 (BSD), copied in so the page works without internet.

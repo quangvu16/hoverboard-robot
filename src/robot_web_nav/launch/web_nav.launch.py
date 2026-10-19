@@ -21,6 +21,8 @@ Arguments:
   rviz:=false       cartographer only; the page replaces RViz (amcl's launch
                     always opens RViz)
   ws_port:=9090  http_port:=8000
+  explore:=auto|true|false  explore_lite for the Explore button; auto = only while
+                    mapping (stack:=cartographer with no map:=)
   docking:=true|false  the dock manager (robot_docking): Set dock here / Dock /
                     Undock on the page, auto-dock when the battery is low
   auto_dock:=true|false
@@ -56,8 +58,18 @@ def nav_stack(context):
         return [LogInfo(msg='stack:=none - start Cartographer or Nav2 yourself')]
     if map_path and not os.path.isfile(map_path):
         return [LogInfo(msg=f'map file not found: {map_path} - nav stack NOT started')]
-    return [IncludeLaunchDescription(PythonLaunchDescriptionSource(launch_file),
-                                     launch_arguments=args.items())]
+    actions = [IncludeLaunchDescription(PythonLaunchDescriptionSource(launch_file),
+                                        launch_arguments=args.items())]
+    # Explore button: explore_lite, paused until the page sends /explore/resume
+    # true. Only while mapping (Cartographer without a map), where there is
+    # unknown space to explore; explore:=true forces it, false never.
+    explore = LaunchConfiguration('explore').perform(context)
+    if explore == 'true' or (explore == 'auto' and stack == 'cartographer' and not map_path):
+        actions.append(Node(
+            package='explore_lite', executable='explore', name='explore_node', output='screen',
+            parameters=[os.path.join(get_package_share_directory('explore_lite'), 'config', 'params.yaml'),
+                        {'start_paused': True, 'use_sim_time': False}]))
+    return actions
 
 
 def generate_launch_description():
@@ -74,6 +86,7 @@ def generate_launch_description():
         DeclareLaunchArgument('ws_port', default_value='9090'),
         DeclareLaunchArgument('http_port', default_value='8000'),
         DeclareLaunchArgument('docking', default_value='true', choices=['true', 'false']),
+        DeclareLaunchArgument('explore', default_value='auto', choices=['auto', 'true', 'false']),
         DeclareLaunchArgument('auto_dock', default_value='true', choices=['true', 'false']),
 
         IncludeLaunchDescription(AnyLaunchDescriptionSource(rosbridge),
